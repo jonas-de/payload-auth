@@ -203,9 +203,13 @@ describe("getBeforeDeleteHook", () => {
     expect(deletedCollections).not.toContain("twoFactors");
   });
 
-  it("does not throw when delete operations fail", async () => {
+  // NEW-3: a failed cascade must abort the user delete, not silently proceed.
+  // Payload aborts a delete only when a beforeDelete hook throws, so the hook
+  // must re-throw after killing the transaction and logging.
+  it("rethrows when delete operations fail, aborting the user delete", async () => {
     const hook = getBeforeDeleteHook();
-    const deleteMock = vi.fn().mockRejectedValue(new Error("DB error"));
+    const dbError = new Error("DB error");
+    const deleteMock = vi.fn().mockRejectedValue(dbError);
 
     const req = {
       payload: {
@@ -219,8 +223,9 @@ describe("getBeforeDeleteHook", () => {
       transactionID: undefined
     };
 
-    // Should not throw — errors should be caught
-    await expect(hook({ req, id: "user-1" } as any)).resolves.not.toThrow();
+    await expect(hook({ req, id: "user-1" } as any)).rejects.toThrow(
+      "DB error"
+    );
   });
 
   it("uses transaction when available", async () => {
