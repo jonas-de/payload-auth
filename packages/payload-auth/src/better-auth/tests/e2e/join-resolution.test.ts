@@ -118,6 +118,26 @@ describe("Join Resolution", () => {
       expect(typeof found.user).toBe("object");
       expect(found.user.id).toBe(String(user.id));
       expect(found.user.email).toBe("forward-join@test.com");
+
+      // The joined doc must go through the same transformOutput normalization
+      // as reverse-joined docs — including ID normalization on the nested
+      // document itself (typeof id === "string", not left as a raw number).
+      //
+      // NOTE: we don't assert found.user.createdAt is a Date instance here.
+      // That's blocked by a separate, pre-existing bug in
+      // applySaveToJwtReturned (plugin/lib/sanitize-better-auth-options/
+      // utils/apply-save-to-jwt-returned.ts), which overwrites
+      // additionalFields.createdAt with a bare `{ returned: false }` object
+      // whenever the field lacks explicit saveToJWT: true — wiping the
+      // `type: "date"` off the BA schema for the "user" and "session"
+      // models entirely. That bug predates this change (confirmed via git
+      // history) and is out of scope for join normalization.
+      expect(typeof found.user.id).toBe("string");
+      // The BA field key (userId) must still carry the flat string ID
+      // alongside the populated object under the renamed Payload key (user),
+      // and both must agree on the same normalized ID value.
+      expect(typeof found.userId).toBe("string");
+      expect(found.userId).toBe(found.user.id);
     });
   });
 
