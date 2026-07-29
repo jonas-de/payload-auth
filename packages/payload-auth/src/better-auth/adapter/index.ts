@@ -262,7 +262,15 @@ const payloadAdapter: PayloadAdapter = ({ payloadClient, adapterConfig }) => {
             })
           });
           if (relDoc) {
-            doc[relField.name] = relDoc;
+            // Transform the joined doc the same way the parent doc will be
+            // transformed (dates → Date objects, nested IDs → strings,
+            // renames applied) so forward-joined docs match the shape of
+            // reverse-joined docs instead of leaking raw Payload output.
+            doc[relField.name] = transformOutput({
+              doc: relDoc,
+              model: joinModelKey as ModelKey,
+              payload
+            });
           }
         } catch (error) {
           debugLog([
