@@ -14,8 +14,13 @@ export function betterAuthStrategy(userSlug?: string): AuthStrategy {
       try {
         const payloadAuth = await getPayloadAuth(payload.config);
 
+        // Read-only lookup: Server-Action cookie writes (e.g. from nextCookies()) trigger
+        // router-cache invalidation and can cause an infinite buildFormState loop in the
+        // Payload admin panel (see issue #139). Refresh still happens on real BA endpoints
+        // and the plugin's refresh-token endpoint.
         const res = await payloadAuth.betterAuth.api.getSession({
-          headers
+          headers,
+          query: { disableRefresh: true }
         });
 
         if (!res) {
