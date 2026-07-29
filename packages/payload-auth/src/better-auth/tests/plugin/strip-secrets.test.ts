@@ -8,6 +8,8 @@ const SECRET_SENTINEL = "test-secret-leak-sentinel";
 const CLIENT_SECRET_SENTINEL = "test-client-secret-sentinel";
 const APPLE_SECRET_SENTINEL = "test-apple-client-secret-sentinel";
 const CLIENT_ID_SENTINEL = "test-client-id-should-survive";
+const PLUGIN_API_KEY_SENTINEL = "test-plugin-api-key-sentinel";
+const PLUGIN_TOTP_DIGITS_SENTINEL = 6;
 
 const baseCollectionMap: Record<string, CollectionConfig> = {
   "admin-invitations": {
@@ -36,6 +38,30 @@ function buildPluginOptions(): PayloadAuthOptions {
       }
     }
   } as PayloadAuthOptions;
+}
+
+/**
+ * Simulates a Better Auth plugin whose raw config is exposed on the plugin
+ * object as `options` (this is how the real `twoFactor()` plugin from
+ * `better-auth/plugins` behaves — see `two-factor-verify` view, which reads
+ * `plugin.options.totpOptions.digits`). `apiKey` here stands in for any
+ * secret-shaped key a plugin config might carry (e.g. a payments plugin's
+ * `apiKey`/`secretKey`).
+ */
+function buildPluginOptionsWithPluginConfig(): PayloadAuthOptions {
+  return {
+    betterAuthOptions: {
+      plugins: [
+        {
+          id: "two-factor",
+          options: {
+            apiKey: PLUGIN_API_KEY_SENTINEL,
+            totpOptions: { digits: PLUGIN_TOTP_DIGITS_SENTINEL }
+          }
+        }
+      ]
+    }
+  } as unknown as PayloadAuthOptions;
 }
 
 describe("stripSecretsFromPluginOptions", () => {
@@ -89,6 +115,32 @@ describe("stripSecretsFromPluginOptions", () => {
       (stripped.betterAuthOptions as Record<string, unknown>)?.secret
     ).toBeUndefined();
   });
+
+  it("nulls secret-shaped keys nested inside a plugin's config (e.g. options.apiKey)", () => {
+    const stripped = stripSecretsFromPluginOptions(
+      buildPluginOptionsWithPluginConfig()
+    );
+    const plugin = stripped.betterAuthOptions?.plugins?.[0] as unknown as {
+      id: string;
+      options: { apiKey: unknown; totpOptions: { digits: unknown } };
+    };
+    expect(plugin.options.apiKey).toBeNull();
+    expect(JSON.stringify(stripped)).not.toContain(PLUGIN_API_KEY_SENTINEL);
+  });
+
+  it("preserves plugin id and non-secret nested keys the views depend on", () => {
+    const stripped = stripSecretsFromPluginOptions(
+      buildPluginOptionsWithPluginConfig()
+    );
+    const plugin = stripped.betterAuthOptions?.plugins?.[0] as unknown as {
+      id: string;
+      options: { totpOptions: { digits: unknown } };
+    };
+    expect(plugin.id).toBe("two-factor");
+    expect(plugin.options.totpOptions.digits).toBe(
+      PLUGIN_TOTP_DIGITS_SENTINEL
+    );
+  });
 });
 
 describe("applyBetterAuthAdminConfig — serverProps do not leak secrets", () => {
@@ -107,6 +159,21 @@ describe("applyBetterAuthAdminConfig — serverProps do not leak secrets", () =>
     expect(serialized).not.toContain(APPLE_SECRET_SENTINEL);
     // Sanity: clientId must survive — the login UI needs it.
     expect(serialized).toContain(CLIENT_ID_SENTINEL);
+  });
+
+  it("serialized config.admin contains no secret-shaped keys nested inside a plugin config", () => {
+    const config: Config = {} as Config;
+    applyBetterAuthAdminConfig({
+      config,
+      pluginOptions: buildPluginOptionsWithPluginConfig(),
+      collectionMap: baseCollectionMap,
+      resolvedBetterAuthSchemas: baseSchemas
+    });
+
+    const serialized = JSON.stringify(config.admin);
+    expect(serialized).not.toContain(PLUGIN_API_KEY_SENTINEL);
+    // Sanity: the two-factor view's totpOptions.digits must survive.
+    expect(serialized).toContain(String(PLUGIN_TOTP_DIGITS_SENTINEL));
   });
 
   it("does not mutate the secrets on the caller's pluginOptions", () => {
