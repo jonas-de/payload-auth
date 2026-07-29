@@ -263,6 +263,7 @@ export function AdminSignupClient({
         <LoginFormProvider
           loginMethods={loginMethods}
           redirectUrl={redirectUrl}
+          adminRoute={adminRoute}
           baseURL={baseURL}
           basePath={basePath}
           isSignup={true}
