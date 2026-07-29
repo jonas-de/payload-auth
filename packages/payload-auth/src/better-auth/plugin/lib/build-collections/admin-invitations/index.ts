@@ -78,6 +78,16 @@ export function buildAdminInvitationsCollection({
         required: true
       },
       {
+        name: "expiresAt",
+        label: "Expires At",
+        type: "date",
+        required: true,
+        admin: {
+          readOnly: true,
+          description: "The invitation is invalid after this time."
+        }
+      },
+      {
         name: "url",
         label: "URL",
         type: "text",

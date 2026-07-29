@@ -71,6 +71,14 @@ export const useAdminInviteAfterSignUpMiddleware = async ({
       return;
     }
 
+    if (
+      adminInvitation.expiresAt &&
+      new Date(adminInvitation.expiresAt) <= new Date()
+    ) {
+      if (typeof originalAfter === "function") await originalAfter(ctx);
+      return;
+    }
+
     // Immediately consume (delete) the token to prevent reuse.
     await adapter.delete({
       model: adminInvitationCollectionSlug,
