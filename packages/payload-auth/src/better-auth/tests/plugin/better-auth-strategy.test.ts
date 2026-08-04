@@ -73,6 +73,37 @@ describe("betterAuthStrategy", () => {
     expect(result.user!._strategy).toBe("better-auth");
   });
 
+  // Issue #139: the strategy must perform a read-only session lookup so it never
+  // triggers a Set-Cookie refresh that nextCookies() writes inside a Server Action,
+  // which causes an infinite buildFormState loop in the admin panel.
+  it("calls getSession with disableRefresh to avoid triggering session refresh", async () => {
+    const mockUser = {
+      id: "user-1",
+      email: "test@test.com",
+      role: ["user"],
+      banned: false
+    };
+    const mockPayloadAuth = createMockPayloadAuth({
+      session: { userId: "user-1", token: "abc" },
+      user: { id: "user-1" },
+      findByIDResult: mockUser
+    });
+    mockGetPayloadAuth.mockResolvedValue(mockPayloadAuth);
+
+    const headers = new Headers();
+    await strategy.authenticate!({
+      payload: { config: {} } as any,
+      headers
+    });
+
+    expect(mockPayloadAuth.betterAuth.api.getSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        headers,
+        query: { disableRefresh: true }
+      })
+    );
+  });
+
   it("returns null user when no session exists", async () => {
     const mockPayloadAuth = createMockPayloadAuth({ session: undefined });
     mockGetPayloadAuth.mockResolvedValue(mockPayloadAuth);

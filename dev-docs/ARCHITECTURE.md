@@ -509,7 +509,7 @@ sequenceDiagram
     participant PL as Payload Local API
 
     Admin->>Strategy: Request with cookies/headers
-    Strategy->>BA: getSession(headers)
+    Strategy->>BA: getSession(headers, disableRefresh: true)
 
     alt Valid session found
         BA-->>Strategy: session + user
@@ -526,6 +526,8 @@ sequenceDiagram
         Strategy-->>Admin: user null
     end
 ```
+
+The strategy performs a **read-only session lookup**: `getSession` is called with `query: { disableRefresh: true }`, so it never mutates or extends the session and never emits a `Set-Cookie` header. This matters because the strategy runs on every authenticated admin request — if it were allowed to refresh, and `nextCookies()` is present in the Better Auth plugin list, each refresh's `Set-Cookie` gets written via `cookies().set()` inside a Server Action, which invalidates the Next.js router cache and triggers a re-render, which calls the strategy again, refreshes again, and so on — an infinite `buildFormState` POST loop in the admin panel (issue #139). Session refresh still happens normally on real Better Auth endpoints (e.g. `/get-session` called directly by the client) and on the plugin's dedicated refresh-token endpoint. If you still see the loop after this fix with `nextCookies()` enabled, check issue #139 — other endpoints besides the auth strategy can also set cookies during Server Actions.
 
 ---
 
