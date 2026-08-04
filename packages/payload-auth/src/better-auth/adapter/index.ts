@@ -127,6 +127,7 @@ const payloadAdapter: PayloadAdapter = ({ payloadClient, adapterConfig }) => {
       convertSelect,
       convertSort,
       getCollectionSlug,
+      getForwardRelationFieldNames,
       singleIdQuery
     } = createTransform(options, adapterConfig.enableDebugLogs ?? false);
 
@@ -187,6 +188,11 @@ const payloadAdapter: PayloadAdapter = ({ payloadClient, adapterConfig }) => {
         );
 
         if (!joinFieldName) {
+          // This is only debug-level here because a forward join is still
+          // possible — populateForwardJoins re-checks this model and, if it
+          // *also* can't resolve a forward relationship field, promotes
+          // this same "no join field found" condition to errorLog since at
+          // that point the explicitly requested join has genuinely failed.
           debugLog([
             `join skipped (reverse): no join field targeting '${getCollectionSlug(modelKey as ModelKey)}' on ${collectionSlug} — will attempt forward join`
           ]);
@@ -233,15 +239,55 @@ const payloadAdapter: PayloadAdapter = ({ payloadClient, adapterConfig }) => {
 
         const joinSlug = getCollectionSlug(joinModelKey as ModelKey);
 
-        // Find the forward relationship field pointing to the join collection
-        const relField = allFields.find((f) => {
-          if (f.type !== "relationship" && f.type !== "upload") return false;
-          if (!("relationTo" in f)) return false;
-          if (Array.isArray(f.relationTo))
-            return f.relationTo.includes(joinSlug);
-          return f.relationTo === joinSlug;
-        });
-        if (!relField) continue;
+        // Prefer schema-derived field selection: the BA schema's
+        // `references.model` tells us exactly which field BetterAuth
+        // intends for this forward join, disambiguating cases where a
+        // collection has multiple relationship fields targeting the same
+        // collection (e.g. session.user and session.impersonatedBy both
+        // target "users" — picking the first Payload relationTo match
+        // would be luck of field order).
+        const schemaFieldNames = getForwardRelationFieldNames(
+          model as ModelKey,
+          joinSlug
+        );
+        let relField: (typeof allFields)[number] | undefined;
+
+        if (schemaFieldNames.length > 0) {
+          if (schemaFieldNames.length > 1) {
+            errorLog([
+              `forward join field selection ambiguous for '${joinModelKey}' on ${collectionSlug}: schema has multiple candidate fields [${schemaFieldNames.join(", ")}] targeting '${joinSlug}' — using '${schemaFieldNames[0]}'`
+            ]);
+          }
+          relField = allFields.find((f) => f.name === schemaFieldNames[0]);
+        }
+
+        // Fallback: first Payload relationship/upload field whose
+        // relationTo matches the joined collection. Used when the BA
+        // schema has no references.model match (e.g. custom fields not
+        // declared in the schema).
+        if (!relField) {
+          relField = allFields.find((f) => {
+            if (f.type !== "relationship" && f.type !== "upload") return false;
+            if (!("relationTo" in f)) return false;
+            if (Array.isArray(f.relationTo))
+              return f.relationTo.includes(joinSlug);
+            return f.relationTo === joinSlug;
+          });
+        }
+        if (!relField) {
+          // Neither a reverse join field (checked above via
+          // resolveJoinFieldName) nor a forward relationship field (schema
+          // or Payload relationTo fallback) could be found for this model,
+          // even though it was explicitly requested in the join option.
+          // This is a real misconfiguration/mismatch worth surfacing —
+          // promote from the buildPayloadJoins debugLog ("will attempt
+          // forward join") to an errorLog now that we know the forward
+          // attempt has nothing to work with either.
+          errorLog([
+            `join requested for '${joinModelKey}' on ${collectionSlug} but no reverse join field or forward relationship field could be resolved`
+          ]);
+          continue;
+        }
 
         const relId = doc[relField.name];
         if (!relId) continue;
@@ -262,11 +308,19 @@ const payloadAdapter: PayloadAdapter = ({ payloadClient, adapterConfig }) => {
             })
           });
           if (relDoc) {
-            doc[relField.name] = relDoc;
+            // Transform the joined doc the same way the parent doc will be
+            // transformed (dates → Date objects, nested IDs → strings,
+            // renames applied) so forward-joined docs match the shape of
+            // reverse-joined docs instead of leaking raw Payload output.
+            doc[relField.name] = transformOutput({
+              doc: relDoc,
+              model: joinModelKey as ModelKey,
+              payload
+            });
           }
         } catch (error) {
-          debugLog([
-            `forward join lookup failed for '${joinModelKey}' on ${collectionSlug}:`,
+          errorLog([
+            `forward join lookup failed for '${joinModelKey}' on ${collectionSlug} (relation id: ${relId}):`,
             error
           ]);
         }

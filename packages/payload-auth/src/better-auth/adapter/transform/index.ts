@@ -198,6 +198,40 @@ export const createTransform = (
   }
 
   /**
+   * Resolves the Payload field name(s) on `model` that hold a forward
+   * (many-to-one) relationship to `joinCollectionSlug`, based on the
+   * BetterAuth schema's `references.model` metadata.
+   *
+   * This disambiguates fields that Payload's `relationTo` alone cannot:
+   * e.g. session has both `user` and `impersonatedBy` relating to the same
+   * "users" collection, so picking the first Payload relationship field
+   * whose `relationTo` matches is unreliable (luck of field order). The BA
+   * schema's `references.model` tells us exactly which field BetterAuth
+   * intends for a given forward join.
+   *
+   * Note: `field.references.model` here is a Payload collection slug (not
+   * a BA model key) — this codebase's plugin sanitization step
+   * (configureOrganizationPlugin / configureAdminPlugin) always rewrites
+   * `references.model` to the resolved collection slug before betterAuth()
+   * processes it, and BetterAuth's own base fields resolve it the same way
+   * via `options.<model>.modelName`.
+   *
+   * Returns all matches (usually one) so the caller can detect and log
+   * ambiguity rather than silently picking one.
+   */
+  function getForwardRelationFieldNames(
+    model: ModelKey,
+    joinCollectionSlug: string
+  ): string[] {
+    const modelFields = schema[model]?.fields;
+    if (!modelFields) return [];
+
+    return Object.entries(modelFields)
+      .filter(([, field]) => field.references?.model === joinCollectionSlug)
+      .map(([fieldKey]) => getFieldName(model, fieldKey));
+  }
+
+  /**
    * Determines if a field is a relationship field by checking for a references property.
    *
    * Relationship fields in the schema have a 'references' property that points to another model.
@@ -712,10 +746,17 @@ export const createTransform = (
   ): void {
     // Case 1: Primitive ID value (string or number)
     if (typeof value === "string" || typeof value === "number") {
-      // For BetterAuth: Always use string IDs
+      // For Payload: Keep original type — but only under a distinct key.
+      // When fieldName === originalKey (no rename configured for this
+      // field), writing here would be immediately clobbered by the
+      // BetterAuth string ID below, which is exactly what we want: BA
+      // must always receive a string ID under its own field key.
+      if (fieldName !== originalKey) {
+        result[fieldName] = value;
+      }
+      // For BetterAuth: Always use string IDs. Written last so it always
+      // wins on the BA field key, even when fieldName === originalKey.
       result[originalKey] = String(value);
-      // For Payload: Keep original type
-      result[fieldName] = value;
       return;
     }
 
@@ -726,13 +767,17 @@ export const createTransform = (
       !Array.isArray(value) &&
       "id" in value
     ) {
-      // For BetterAuth: Extract and stringify the ID
+      // Preserve the populated relationship object so joins return full
+      // documents — but only under a distinct key. See Case 1 for why.
+      if (fieldName !== originalKey) {
+        result[fieldName] = {
+          ...value,
+          id: String(value.id)
+        };
+      }
+      // For BetterAuth: Extract and stringify the ID. Written last so it
+      // always wins on the BA field key.
       result[originalKey] = String(value.id);
-      // Preserve the populated relationship object so joins return full documents
-      result[fieldName] = {
-        ...value,
-        id: String(value.id)
-      };
       return;
     }
 
@@ -744,17 +789,22 @@ export const createTransform = (
           (item) => typeof item === "object" && item !== null && "id" in item
         )
       ) {
-        // Array of objects with IDs
+        // Array of objects with IDs — keep joined documents intact while
+        // normalizing ID type, but only under a distinct key.
+        if (fieldName !== originalKey) {
+          result[fieldName] = value.map((item) => ({
+            ...item,
+            id: String(item.id)
+          }));
+        }
+        // For BetterAuth: array of string IDs, written last so it wins.
         result[originalKey] = value.map((item) => String(item.id));
-        // Keep joined documents intact while normalizing ID type
-        result[fieldName] = value.map((item) => ({
-          ...item,
-          id: String(item.id)
-        }));
       } else {
         // Array of primitive IDs
+        if (fieldName !== originalKey) {
+          result[fieldName] = value.map((item) => item);
+        }
         result[originalKey] = value.map((item) => String(item));
-        result[fieldName] = value.map((item) => item);
       }
       return;
     }
@@ -1084,6 +1134,7 @@ export const createTransform = (
   return {
     getFieldName,
     getCollectionSlug,
+    getForwardRelationFieldNames,
     singleIdQuery,
     transformInput,
     transformOutput,
