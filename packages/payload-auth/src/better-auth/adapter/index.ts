@@ -188,6 +188,11 @@ const payloadAdapter: PayloadAdapter = ({ payloadClient, adapterConfig }) => {
         );
 
         if (!joinFieldName) {
+          // This is only debug-level here because a forward join is still
+          // possible — populateForwardJoins re-checks this model and, if it
+          // *also* can't resolve a forward relationship field, promotes
+          // this same "no join field found" condition to errorLog since at
+          // that point the explicitly requested join has genuinely failed.
           debugLog([
             `join skipped (reverse): no join field targeting '${getCollectionSlug(modelKey as ModelKey)}' on ${collectionSlug} — will attempt forward join`
           ]);
@@ -269,7 +274,20 @@ const payloadAdapter: PayloadAdapter = ({ payloadClient, adapterConfig }) => {
             return f.relationTo === joinSlug;
           });
         }
-        if (!relField) continue;
+        if (!relField) {
+          // Neither a reverse join field (checked above via
+          // resolveJoinFieldName) nor a forward relationship field (schema
+          // or Payload relationTo fallback) could be found for this model,
+          // even though it was explicitly requested in the join option.
+          // This is a real misconfiguration/mismatch worth surfacing —
+          // promote from the buildPayloadJoins debugLog ("will attempt
+          // forward join") to an errorLog now that we know the forward
+          // attempt has nothing to work with either.
+          errorLog([
+            `join requested for '${joinModelKey}' on ${collectionSlug} but no reverse join field or forward relationship field could be resolved`
+          ]);
+          continue;
+        }
 
         const relId = doc[relField.name];
         if (!relId) continue;
@@ -301,8 +319,8 @@ const payloadAdapter: PayloadAdapter = ({ payloadClient, adapterConfig }) => {
             });
           }
         } catch (error) {
-          debugLog([
-            `forward join lookup failed for '${joinModelKey}' on ${collectionSlug}:`,
+          errorLog([
+            `forward join lookup failed for '${joinModelKey}' on ${collectionSlug} (relation id: ${relId}):`,
             error
           ]);
         }
