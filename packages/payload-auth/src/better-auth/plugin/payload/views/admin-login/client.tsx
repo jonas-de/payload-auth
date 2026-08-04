@@ -38,15 +38,17 @@ export function AdminLoginClient({
   prefill
 }: AdminLoginClientProps) {
   const { config } = useConfig();
+  const adminRoute = config.routes.admin;
   const redirectUrl = getSafeRedirect(
     searchParams?.redirect as string,
-    config.routes.admin
+    adminRoute
   );
 
   return (
     <LoginFormProvider
       loginMethods={loginMethods}
       redirectUrl={redirectUrl}
+      adminRoute={adminRoute}
       baseURL={baseURL}
       basePath={basePath}
       loginIdentifiers={loginIdentifiers}

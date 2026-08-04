@@ -62,6 +62,12 @@ export const passwordField = ({
   return schema;
 };
 
+export const otpField = ({ digits = 6 }: { digits?: number } = {}) =>
+  z
+    .string()
+    .length(digits, `Code must be ${digits} digits`)
+    .refine((val) => /^\d+$/.test(val), "Code must be numeric");
+
 export const confirmPasswordField = ({
   t,
   required = true

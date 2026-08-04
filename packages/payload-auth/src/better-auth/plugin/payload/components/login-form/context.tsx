@@ -52,6 +52,7 @@ export interface LoginFormProviderProps {
   children: React.ReactNode;
   loginMethods: LoginMethod[];
   redirectUrl: string;
+  adminRoute: string;
   baseURL?: string;
   basePath?: string;
   isSignup?: boolean;
@@ -66,6 +67,7 @@ export function LoginFormProvider({
   children,
   loginMethods,
   redirectUrl,
+  adminRoute,
   baseURL,
   basePath,
   isSignup = false,
@@ -95,7 +97,7 @@ export function LoginFormProvider({
           twoFactorClient({
             onTwoFactorRedirect() {
               router.push(
-                `${redirectUrl.split("?")[0]}${adminRoutes.twoFactorVerify}?redirect=${redirectUrl}`
+                `${adminRoute}${adminRoutes.twoFactorVerify}?redirect=${encodeURIComponent(redirectUrl)}`
               );
             }
           }),
@@ -106,6 +108,7 @@ export function LoginFormProvider({
         ]
       }),
     [
+      adminRoute,
       baseURL,
       basePath,
       hasMagicLinkPlugin,

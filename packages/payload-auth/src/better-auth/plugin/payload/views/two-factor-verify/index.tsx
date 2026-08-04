@@ -7,6 +7,7 @@ import {
   adminRoutes,
   supportedBAPluginIds
 } from "@/better-auth/plugin/constants";
+import { getPayloadAuth } from "@/better-auth/plugin/lib/get-payload-auth";
 import { PayloadAuthOptions } from "@/better-auth/plugin/types";
 import { valueOrDefaultString } from "@/shared/utils/value-or-default";
 import { getSafeRedirect } from "../../utils/get-safe-redirect";
@@ -48,9 +49,24 @@ async function TwoFactorVerify({
       (plugin) => plugin.id === supportedBAPluginIds.twoFactor
     )?.options ?? {};
 
-  const twoFactorCookie = cookieStore.get(
-    `${process.env.NODE_ENV === "production" ? "__Secure-" : ""}better-auth.two_factor`
-  )?.value;
+  // Better Auth's two-factor plugin does not register its verification
+  // cookie under `authCookies` (unlike sessionToken/sessionData/etc) — it is
+  // created ad hoc via `ctx.context.createAuthCookie("two_factor")` on every
+  // use (@see better-auth/dist/plugins/two-factor/{index,verify-two-factor}.mjs
+  // and the "two_factor" name from better-auth/dist/plugins/two-factor/constant.mjs).
+  // `createAuthCookie` is exposed directly on the auth context
+  // (better-auth/dist/context/create-context.mjs) and derives the exact same
+  // name Better Auth itself set (secure prefix + advanced.cookiePrefix +
+  // any advanced.cookies["two_factor"].name override), so we reuse it here
+  // instead of re-deriving the naming rule ourselves.
+  const payloadAuth = await getPayloadAuth(config);
+  const authContext = await payloadAuth.betterAuth?.$context;
+  const twoFactorCookieName = authContext?.createAuthCookie(
+    "two_factor"
+  ).name;
+  const twoFactorCookie = twoFactorCookieName
+    ? cookieStore.get(twoFactorCookieName)?.value
+    : undefined;
   if (!twoFactorCookie) {
     redirect(`${adminRoute}${loginRoute}`);
   }
