@@ -121,6 +121,38 @@ export const createTransform = (
   }
 
   /**
+   * Checks if a field in the Payload collection is a hasMany select field
+   * (e.g. users.role, built from pluginOptions.users.roles/adminRoles).
+   *
+   * This is used to scope BetterAuth's comma-string <-> array role
+   * conversion to only the fields that are actually stored as arrays.
+   * member/invitation store role as plain text (BA's comma-string) and
+   * must not be force-converted into an array.
+   *
+   * @param payload - The Payload client instance
+   * @param collectionSlug - The slug of the collection
+   * @param fieldName - The name of the field to check
+   * @returns True if the field is a hasMany select field, false otherwise
+   */
+  function isHasManySelectField(
+    payload: BasePayload,
+    collectionSlug: string,
+    fieldName: string
+  ): boolean {
+    const collection = payload.collections[collectionSlug];
+    if (!collection) return false;
+
+    let fields = flattenedFieldsCache.get(collectionSlug);
+    if (!fields) {
+      fields = flattenAllFields({ fields: collection.config.fields });
+      flattenedFieldsCache.set(collectionSlug, fields);
+    }
+    const field = fields.find((f) => f.name === fieldName);
+
+    return field?.type === "select" && (field as any).hasMany === true;
+  }
+
+  /**
    * Maps a BetterAuth schema field to its corresponding Payload CMS field name.
    *
    * This function resolves the appropriate field name by:
@@ -271,18 +303,24 @@ export const createTransform = (
    * @param value - The value to normalize
    * @param isRelatedField - Whether this field is a relationship field
    * @param idType - The expected ID type ('number' or 'text')
+   * @param isHasManySelect - Whether the target Payload field is a hasMany select
+   *   (e.g. users.role). Only fields of this type get BA's comma-string <-> array
+   *   role conversion — member/invitation store role as plain text and must
+   *   pass through untouched.
    * @returns The normalized value
    */
   function normalizeData({
     key,
     value,
     isRelatedField,
-    idType
+    idType,
+    isHasManySelect
   }: {
     key: string;
     value: any;
     isRelatedField: boolean;
     idType: "number" | "text";
+    isHasManySelect: boolean;
   }) {
     // Skip processing for null/undefined values
     if (value === null || value === undefined) {
@@ -348,15 +386,21 @@ export const createTransform = (
       }
     }
 
-    // Handle role fields (Coming from better auth, will be a single string separated by commas if there are multiple roles)
-    if (key === "role" || key === "roles") {
+    // Handle role fields (coming from better-auth, will be a single string
+    // separated by commas if there are multiple roles). This conversion only
+    // applies when the target Payload field is a hasMany select (e.g.
+    // users.role) — member/invitation store role as plain text holding BA's
+    // comma-string and must not be force-converted into an array (#112).
+    // Casing is preserved (no .toLowerCase()) so configured roles like
+    // "orgOwner" survive select validation / adminRoles checks (ADAPTER-10).
+    if ((key === "role" || key === "roles") && isHasManySelect) {
       if (Array.isArray(value)) {
         return value.map((role: string) =>
-          typeof role === "string" ? role.trim().toLowerCase() : role
+          typeof role === "string" ? role.trim() : role
         );
       }
       if (typeof value === "string") {
-        return value.split(",").map((role: string) => role.trim().toLowerCase());
+        return value.split(",").map((role: string) => role.trim());
       }
       return value;
     }
@@ -416,12 +460,22 @@ export const createTransform = (
       const isRelatedField =
         isRelationshipField(key, schemaFields) || isPayloadRel;
 
+      // Determine if the target Payload field is a hasMany select (e.g.
+      // users.role) — only these get BA's comma-string <-> array role
+      // conversion (#112).
+      const isHasManySelect = isHasManySelectField(
+        payload,
+        collectionSlug,
+        targetFieldName
+      );
+
       // Normalize the data value based on field type and ID type
       const normalizedData = normalizeData({
         idType,
         key,
         value,
-        isRelatedField
+        isRelatedField,
+        isHasManySelect
       });
 
       const targetFieldKey = getCollectionFieldNameByFieldKeyUntyped(

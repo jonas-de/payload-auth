@@ -41,6 +41,7 @@ function defaultMockPayload(): BasePayload {
         { name: "email", type: "text" },
         { name: "emailVerified", type: "checkbox" },
         { name: "image", type: "text" },
+        { name: "role", type: "select", hasMany: true, options: ["user", "admin"] },
         { name: "createdAt", type: "date" },
         { name: "updatedAt", type: "date" }
       ]),
@@ -192,6 +193,45 @@ describe("Transform Layer", () => {
       });
 
       expect(result.role).toEqual(["admin"]);
+    });
+
+    // Plan 009 / ADAPTER-10: role casing must be preserved (no .toLowerCase())
+    // so configured camelCase roles like "orgOwner" survive select validation.
+    it("preserves casing when converting a comma-string role to an array (ADAPTER-10)", () => {
+      const transform = createTransform(minimalOptions, false);
+      const payload = defaultMockPayload();
+
+      const result = transform.transformInput({
+        data: { role: "orgOwner,editor" },
+        model: "user" as any,
+        idType: "text",
+        payload
+      });
+
+      expect(result.role).toEqual(["orgOwner", "editor"]);
+    });
+
+    // Plan 009 / #112: role conversion must be scoped to hasMany select
+    // fields only. member/invitation store role as plain text holding BA's
+    // comma-string and must not be force-converted into an array.
+    it("does not convert role to an array for a plain text field (#112)", () => {
+      const transform = createTransform(minimalOptions, false);
+      const payload = defaultMockPayload();
+      // Give the "sessions" mock collection a text `role` field to simulate
+      // member/invitation, which store role as plain text (not hasMany select).
+      (payload.collections as any).sessions.config.fields.push({
+        name: "role",
+        type: "text"
+      });
+
+      const result = transform.transformInput({
+        data: { role: "owner" },
+        model: "session" as any,
+        idType: "text",
+        payload
+      });
+
+      expect(result.role).toBe("owner");
     });
   });
 
