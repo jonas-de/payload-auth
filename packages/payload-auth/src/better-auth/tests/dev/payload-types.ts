@@ -681,6 +681,10 @@ export interface AdminInvitation {
   id: number;
   role: 'admin' | 'user' | 'adminSuperAdmin';
   token: string;
+  /**
+   * The invitation is invalid after this time.
+   */
+  expiresAt: string;
   url?: string | null;
   updatedAt: string;
   createdAt: string;
@@ -1011,6 +1015,7 @@ export interface ApiKeysSelect<T extends boolean = true> {
 export interface AdminInvitationsSelect<T extends boolean = true> {
   role?: T;
   token?: T;
+  expiresAt?: T;
   url?: T;
   updatedAt?: T;
   createdAt?: T;
