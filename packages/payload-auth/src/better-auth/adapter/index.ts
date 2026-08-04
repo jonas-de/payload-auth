@@ -856,6 +856,256 @@ const payloadAdapter: PayloadAdapter = ({ payloadClient, adapterConfig }) => {
           throw error;
         }
       },
+      async consumeOne<R>({
+        model,
+        where
+      }: {
+        model: string;
+        where: Where[];
+      }): Promise<R | null> {
+        const start = Date.now();
+        const payload = await resolvePayloadClient();
+        const collectionSlug = getCollectionSlug(model as ModelKey);
+
+        // Validate collection exists before proceeding
+        await validateCollection(payload, collectionSlug, model);
+
+        const payloadWhere = convertWhereClause({
+          idType: adapterConfig.idType,
+          model: model as ModelKey,
+          where,
+          payload
+        });
+
+        debugLog(["consumeOne", { collectionSlug, payloadWhere }]);
+
+        try {
+          const singleId = singleIdQuery(payloadWhere);
+          let found: Record<string, any> | null = null;
+
+          if (singleId) {
+            found = await payload
+              .findByID({
+                collection: collectionSlug,
+                id: singleId,
+                depth: PAYLOAD_QUERY_DEPTH,
+                context: createAdapterContext({
+                  model,
+                  operation: "consumeOneRead"
+                })
+              })
+              .catch((error) => {
+                if (
+                  error instanceof Error &&
+                  "status" in error &&
+                  error.status === 404
+                ) {
+                  return null;
+                }
+                throw error;
+              });
+          } else {
+            const docs = await payload.find({
+              collection: collectionSlug,
+              where: payloadWhere,
+              depth: PAYLOAD_QUERY_DEPTH,
+              limit: 1,
+              context: createAdapterContext({
+                model,
+                operation: "consumeOneRead"
+              })
+            });
+            found = docs.docs[0] ?? null;
+          }
+
+          if (!found) return null;
+
+          // Delete by the found row's id (not the original where clause) so we
+          // never delete additional rows that also match a non-unique
+          // predicate. This also closes the double-consume window: a second
+          // concurrent caller that read this same row before it was deleted
+          // will get a 404 on delete-by-id and fall through to `null` below,
+          // instead of deleting a *different* row that also matched `where`.
+          try {
+            await payload.delete({
+              collection: collectionSlug,
+              id: found.id,
+              depth: PAYLOAD_QUERY_DEPTH,
+              context: createAdapterContext({
+                model,
+                operation: "consumeOneDelete"
+              })
+            });
+          } catch (error) {
+            if (
+              error instanceof Error &&
+              "status" in error &&
+              error.status === 404
+            ) {
+              return null;
+            }
+            throw error;
+          }
+
+          const transformedResult = transformOutput<typeof found | null>({
+            doc: found,
+            model: model as ModelKey,
+            payload
+          });
+
+          debugLog([
+            "consumeOne result",
+            {
+              collectionSlug,
+              transformedResult,
+              duration: `${Date.now() - start}ms`
+            }
+          ]);
+
+          return transformedResult as R;
+        } catch (error) {
+          if (
+            error instanceof Error &&
+            "status" in error &&
+            error.status === 404
+          ) {
+            return null;
+          }
+          errorLog(["Error in consumeOne: ", error]);
+          throw error;
+        }
+      },
+      async incrementOne<R>({
+        model,
+        where,
+        increment,
+        set
+      }: {
+        model: string;
+        where: Where[];
+        increment: Record<string, number>;
+        set?: Record<string, unknown>;
+      }): Promise<R | null> {
+        const start = Date.now();
+        const payload = await resolvePayloadClient();
+        const collectionSlug = getCollectionSlug(model as ModelKey);
+
+        // Validate collection exists before proceeding
+        await validateCollection(payload, collectionSlug, model);
+
+        const payloadWhere = convertWhereClause({
+          idType: adapterConfig.idType,
+          model: model as ModelKey,
+          where,
+          payload
+        });
+
+        debugLog(["incrementOne", { collectionSlug, payloadWhere, increment, set }]);
+
+        try {
+          const singleId = singleIdQuery(payloadWhere);
+          let current: Record<string, any> | null = null;
+
+          if (singleId) {
+            current = await payload
+              .findByID({
+                collection: collectionSlug,
+                id: singleId,
+                depth: PAYLOAD_QUERY_DEPTH,
+                context: createAdapterContext({
+                  model,
+                  operation: "incrementOneRead"
+                })
+              })
+              .catch((error) => {
+                if (
+                  error instanceof Error &&
+                  "status" in error &&
+                  error.status === 404
+                ) {
+                  return null;
+                }
+                throw error;
+              });
+          } else {
+            const docs = await payload.find({
+              collection: collectionSlug,
+              where: payloadWhere,
+              depth: PAYLOAD_QUERY_DEPTH,
+              limit: 1,
+              context: createAdapterContext({
+                model,
+                operation: "incrementOneRead"
+              })
+            });
+            current = docs.docs[0] ?? null;
+          }
+
+          // The where clause is both selector and guard (e.g. a `remaining gt
+          // 0` comparison) — if nothing matches at read time, the guard has
+          // already failed.
+          if (!current) return null;
+
+          const data: Record<string, unknown> = { ...(set ?? {}) };
+          for (const [field, delta] of Object.entries(increment)) {
+            const currentValue =
+              typeof current[field] === "number"
+                ? current[field]
+                : Number(current[field] ?? 0);
+            data[field] = currentValue + delta;
+          }
+
+          const transformedInput = transformInput({
+            data,
+            model: model as ModelKey,
+            idType: adapterConfig.idType,
+            payload
+          });
+
+          // Re-apply the original where clause as a compare-and-swap guard on
+          // the update: the update only affects the row if it still matches
+          // `where` (e.g. the counter is still above the guard threshold),
+          // narrowing — though not fully eliminating — the race window
+          // between the read above and this write.
+          const doc = await payload.update({
+            collection: collectionSlug,
+            where: payloadWhere,
+            data: transformedInput,
+            depth: PAYLOAD_QUERY_DEPTH,
+            context: createAdapterContext({ model, operation: "incrementOne" })
+          });
+
+          const updated = doc.docs[0] ?? null;
+          if (!updated) return null;
+
+          const transformedResult = transformOutput<typeof updated | null>({
+            doc: updated,
+            model: model as ModelKey,
+            payload
+          });
+
+          debugLog([
+            "incrementOne result",
+            {
+              collectionSlug,
+              transformedResult,
+              duration: `${Date.now() - start}ms`
+            }
+          ]);
+
+          return transformedResult as R;
+        } catch (error) {
+          if (
+            error instanceof Error &&
+            "status" in error &&
+            error.status === 404
+          ) {
+            return null;
+          }
+          errorLog(["Error in incrementOne: ", error]);
+          throw error;
+        }
+      },
       async count({
         model,
         where
