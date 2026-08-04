@@ -127,6 +127,7 @@ const payloadAdapter: PayloadAdapter = ({ payloadClient, adapterConfig }) => {
       convertSelect,
       convertSort,
       getCollectionSlug,
+      getForwardRelationFieldNames,
       singleIdQuery
     } = createTransform(options, adapterConfig.enableDebugLogs ?? false);
 
@@ -233,14 +234,41 @@ const payloadAdapter: PayloadAdapter = ({ payloadClient, adapterConfig }) => {
 
         const joinSlug = getCollectionSlug(joinModelKey as ModelKey);
 
-        // Find the forward relationship field pointing to the join collection
-        const relField = allFields.find((f) => {
-          if (f.type !== "relationship" && f.type !== "upload") return false;
-          if (!("relationTo" in f)) return false;
-          if (Array.isArray(f.relationTo))
-            return f.relationTo.includes(joinSlug);
-          return f.relationTo === joinSlug;
-        });
+        // Prefer schema-derived field selection: the BA schema's
+        // `references.model` tells us exactly which field BetterAuth
+        // intends for this forward join, disambiguating cases where a
+        // collection has multiple relationship fields targeting the same
+        // collection (e.g. session.user and session.impersonatedBy both
+        // target "users" — picking the first Payload relationTo match
+        // would be luck of field order).
+        const schemaFieldNames = getForwardRelationFieldNames(
+          model as ModelKey,
+          joinSlug
+        );
+        let relField: (typeof allFields)[number] | undefined;
+
+        if (schemaFieldNames.length > 0) {
+          if (schemaFieldNames.length > 1) {
+            errorLog([
+              `forward join field selection ambiguous for '${joinModelKey}' on ${collectionSlug}: schema has multiple candidate fields [${schemaFieldNames.join(", ")}] targeting '${joinSlug}' — using '${schemaFieldNames[0]}'`
+            ]);
+          }
+          relField = allFields.find((f) => f.name === schemaFieldNames[0]);
+        }
+
+        // Fallback: first Payload relationship/upload field whose
+        // relationTo matches the joined collection. Used when the BA
+        // schema has no references.model match (e.g. custom fields not
+        // declared in the schema).
+        if (!relField) {
+          relField = allFields.find((f) => {
+            if (f.type !== "relationship" && f.type !== "upload") return false;
+            if (!("relationTo" in f)) return false;
+            if (Array.isArray(f.relationTo))
+              return f.relationTo.includes(joinSlug);
+            return f.relationTo === joinSlug;
+          });
+        }
         if (!relField) continue;
 
         const relId = doc[relField.name];

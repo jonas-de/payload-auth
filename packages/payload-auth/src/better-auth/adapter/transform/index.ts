@@ -166,6 +166,40 @@ export const createTransform = (
   }
 
   /**
+   * Resolves the Payload field name(s) on `model` that hold a forward
+   * (many-to-one) relationship to `joinCollectionSlug`, based on the
+   * BetterAuth schema's `references.model` metadata.
+   *
+   * This disambiguates fields that Payload's `relationTo` alone cannot:
+   * e.g. session has both `user` and `impersonatedBy` relating to the same
+   * "users" collection, so picking the first Payload relationship field
+   * whose `relationTo` matches is unreliable (luck of field order). The BA
+   * schema's `references.model` tells us exactly which field BetterAuth
+   * intends for a given forward join.
+   *
+   * Note: `field.references.model` here is a Payload collection slug (not
+   * a BA model key) — this codebase's plugin sanitization step
+   * (configureOrganizationPlugin / configureAdminPlugin) always rewrites
+   * `references.model` to the resolved collection slug before betterAuth()
+   * processes it, and BetterAuth's own base fields resolve it the same way
+   * via `options.<model>.modelName`.
+   *
+   * Returns all matches (usually one) so the caller can detect and log
+   * ambiguity rather than silently picking one.
+   */
+  function getForwardRelationFieldNames(
+    model: ModelKey,
+    joinCollectionSlug: string
+  ): string[] {
+    const modelFields = schema[model]?.fields;
+    if (!modelFields) return [];
+
+    return Object.entries(modelFields)
+      .filter(([, field]) => field.references?.model === joinCollectionSlug)
+      .map(([fieldKey]) => getFieldName(model, fieldKey));
+  }
+
+  /**
    * Determines if a field is a relationship field by checking for a references property.
    *
    * Relationship fields in the schema have a 'references' property that points to another model.
@@ -1046,6 +1080,7 @@ export const createTransform = (
   return {
     getFieldName,
     getCollectionSlug,
+    getForwardRelationFieldNames,
     singleIdQuery,
     transformInput,
     transformOutput,
