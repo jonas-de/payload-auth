@@ -1,0 +1,179 @@
+---
+title: Passkeys and two-factor
+description: Add WebAuthn passkeys and TOTP two-factor authentication, including the admin panel views.
+---
+
+Both plugins are supported first-class: the plugin generates their collections and wires
+their admin UI.
+
+## Passkeys
+
+<Steps>
+<Step>
+
+### Install and enable
+
+```package-install
+@better-auth/passkey
+```
+
+```ts title="src/lib/auth/options.ts"
+import { passkey } from '@better-auth/passkey'
+
+export const betterAuthOptions = {
+  plugins: [
+    passkey({
+      rpID: 'localhost',
+      rpName: 'My App',
+      origin: 'http://localhost:3000',
+    }),
+  ],
+} satisfies BetterAuthOptions
+```
+
+`rpID` is the registrable domain without protocol or port (`localhost` in development,
+`example.com` in production). `origin` is the full origin. Both must match what the browser
+sees or WebAuthn refuses to run.
+
+</Step>
+<Step>
+
+### Add the client plugin
+
+```ts title="src/lib/auth/client.ts"
+import { passkeyClient } from '@better-auth/passkey/client'
+
+export const authClient = createAuthClient({
+  plugins: [passkeyClient()],
+})
+```
+
+</Step>
+<Step>
+
+### Regenerate the import map
+
+```bash
+pnpm payload generate:importmap
+```
+
+The passkey button appears on the admin login view automatically, because `setLoginMethods`
+adds `passkey` when the plugin is detected.
+
+</Step>
+</Steps>
+
+This creates a `passkeys` collection with the credential ID, public key, counter and a
+`user` relationship.
+
+### Managing passkeys
+
+A `Passkeys` server component is exported for building a management screen:
+
+```tsx
+import { Passkeys } from 'payload-auth/better-auth/plugin/rsc'
+```
+
+Or drive it from the client:
+
+```ts
+await authClient.passkey.addPasskey({ name: 'MacBook' })
+const { data } = await authClient.passkey.listUserPasskeys()
+await authClient.passkey.deletePasskey({ id })
+```
+
+## Two-factor authentication
+
+<Steps>
+<Step>
+
+### Enable the plugin
+
+```ts title="src/lib/auth/options.ts"
+import { twoFactor } from 'better-auth/plugins'
+
+export const betterAuthOptions = {
+  plugins: [
+    twoFactor({
+      issuer: 'My App',
+      otpOptions: {
+        async sendOTP({ user, otp }) {
+          await sendEmail({ to: user.email, subject: 'Your code', text: otp })
+        },
+      },
+    }),
+  ],
+} satisfies BetterAuthOptions
+```
+
+`issuer` is the label shown in authenticator apps.
+
+</Step>
+<Step>
+
+### Add the client plugin
+
+```ts title="src/lib/auth/client.ts"
+import { twoFactorClient } from 'better-auth/client/plugins'
+
+export const authClient = createAuthClient({
+  plugins: [
+    twoFactorClient({
+      onTwoFactorRedirect() {
+        window.location.href = '/two-factor'
+      },
+    }),
+  ],
+})
+```
+
+</Step>
+<Step>
+
+### Regenerate the import map
+
+```bash
+pnpm payload generate:importmap
+```
+
+</Step>
+</Steps>
+
+This creates a `twoFactors` collection (secret, backup codes, `user` relationship), adds a
+`twoFactorEnabled` checkbox to `users`, and registers the `/admin/two-factor-verify` view.
+
+### The admin challenge
+
+When an admin with 2FA enabled signs in, they are redirected to
+`/admin/two-factor-verify`, which accepts a TOTP code or a backup code. This view is only
+registered when the `twoFactor` plugin is present.
+
+### Enrolling
+
+```ts
+const { data } = await authClient.twoFactor.enable({ password })
+// data.totpURI  → render as a QR code
+// data.backupCodes → show once, tell the user to store them
+
+await authClient.twoFactor.verifyTotp({ code })
+```
+
+A `TwoFactorAuth` client component that handles enrolment (QR code, verification, backup
+codes) is exported for reuse:
+
+```tsx
+import { TwoFactorAuth } from 'payload-auth/better-auth/plugin/client'
+```
+
+<Callout type="warn" title="Locking yourself out">
+If a user enables 2FA and loses both their authenticator and their backup codes, they
+cannot sign in. As an admin you can clear the situation by deleting their `twoFactors`
+record and unchecking `twoFactorEnabled` on their user document in the admin panel.
+</Callout>
+
+## Other passwordless methods
+
+`magicLink`, `emailOTP`, `phoneNumber` and `anonymous` are all supported. Enable the Better
+Auth plugin, add its client counterpart, and — if you want it on the admin login screen —
+list the matching method in `admin.loginMethods` (`magicLink`, `emailOTP`, `phoneOTP`,
+`phoneMagicLink`, `phonePassword`).

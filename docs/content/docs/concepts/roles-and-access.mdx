@@ -1,0 +1,132 @@
+---
+title: Roles and access control
+description: How roles are defined, who can reach the admin panel, and what access control the generated collections use.
+---
+
+## Defining roles
+
+Roles live in the `users` block of your plugin options:
+
+```ts
+betterAuthPlugin({
+  users: {
+    roles: ['user', 'editor', 'admin'],
+    adminRoles: ['admin'],
+    defaultRole: 'user',
+    defaultAdminRole: 'admin',
+  },
+})
+```
+
+| Option | Default | Meaning |
+| --- | --- | --- |
+| `roles` | `['user']` | Every selectable role on the users collection |
+| `adminRoles` | `['admin']` | Roles granted admin access to auth collections |
+| `defaultRole` | `'user'` | Assigned to new users |
+| `defaultAdminRole` | `'admin'` | Assigned to the first admin and to invited admins |
+
+`roles` and `adminRoles` are merged and deduplicated, so a role listed in `adminRoles` does
+not also need to appear in `roles`.
+
+The `role` field on `users` is a Payload `select` with `hasMany: true`, so a user's role is
+a **string array** — `['admin']`, or `['editor', 'admin']` for someone holding both.
+
+## Who gets into the admin panel
+
+The users collection's `admin` access returns true when any of the user's roles appears in
+`adminRoles`. Everyone else is refused at the panel door, even with a valid session.
+
+Role checks tolerate both shapes: an array (`['admin']`) and a comma-separated string
+(`'editor,admin'`), which is what turns up when a role arrives through a JWT claim.
+
+## Access control on generated collections
+
+**`users`**
+
+| Operation | Rule |
+| --- | --- |
+| `read` | Admin roles read everything; other users read only their own document |
+| `create` | Admin roles only |
+| `update` | Admin roles, or a user updating their own document with only allowed fields |
+| `delete` | Admin roles, or a user deleting their own document |
+| `admin` | Admin roles only |
+
+**All other auth collections** (`sessions`, `accounts`, `verifications`,
+`admin-invitations`, and the plugin collections) are admin-roles-only for every operation.
+
+<Callout title="This governs Payload, not Better Auth">
+These rules apply to Payload's Local and REST APIs and to the admin panel. Requests to
+`/api/auth/*` go through Better Auth, which enforces its own authorization — the adapter
+runs underneath it and is not subject to Payload access control.
+</Callout>
+
+## Self-service updates
+
+Non-admin users may only write the fields you list in `users.allowedFields`:
+
+```ts
+betterAuthPlugin({
+  users: {
+    allowedFields: ['name', 'image', 'bio'],
+  },
+})
+```
+
+Default is `['name']`. An update containing any field outside that list is denied.
+
+Password changes are handled separately and do not need to be listed. To change a
+password, send **both** `currentPassword` and `password`; the plugin verifies the current
+password before allowing the write. Sending only one of the two is denied.
+
+## Better Auth `admin` plugin
+
+If you use Better Auth's `admin` plugin, the plugin feeds your Payload role config into
+it, so `defaultRole` and `adminRoles` do not need restating:
+
+```ts
+import { admin } from 'better-auth/plugins'
+
+export const betterAuthOptions = {
+  plugins: [admin()],
+} satisfies BetterAuthOptions
+```
+
+Middleware normalises roles between Payload's array field and the string that Better Auth's
+admin plugin expects, in both directions, so `admin.hasPermission` and the client's
+`adminClient()` methods work unchanged.
+
+For fine-grained permissions, define an access controller and pass it through as usual:
+
+```ts
+import { createAccessControl } from 'better-auth/plugins'
+import { defaultStatements, defaultRoles } from 'better-auth/plugins/admin/access'
+
+const ac = createAccessControl({
+  ...defaultStatements,
+  project: ['create', 'share', 'update', 'delete'],
+})
+
+const superAdmin = ac.newRole({ ...ac.statements })
+
+export const betterAuthOptions = {
+  plugins: [
+    admin({ ac, roles: { ...defaultRoles, superAdmin }, defaultRole: 'user' }),
+  ],
+} satisfies BetterAuthOptions
+```
+
+Any role you use there should also appear in `users.roles` so it is selectable in the
+Payload admin UI.
+
+## Access control in your own collections
+
+Read roles off `req.user` like any other Payload field:
+
+```ts
+import type { Access } from 'payload'
+
+export const isEditor: Access = ({ req: { user } }) => {
+  const roles = Array.isArray(user?.role) ? user.role : []
+  return roles.includes('editor') || roles.includes('admin')
+}
+```

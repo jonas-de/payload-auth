@@ -1,0 +1,143 @@
+---
+title: Troubleshooting
+description: Common problems and what causes them.
+icon: CircleQuestionMark
+---
+
+## The admin panel loops on `buildFormState` requests
+
+**Symptom.** After signing in, the admin panel fires `buildFormState` POSTs endlessly and
+never settles.
+
+**Cause.** Something is emitting `Set-Cookie` during a Server Action. With `nextCookies()`
+enabled, that cookie is written through `cookies().set()`, which invalidates the Next.js
+router cache, forces a re-render, and starts the cycle again.
+
+The plugin's auth strategy is not the culprit — it calls `getSession` with
+`disableRefresh: true` precisely to avoid this. If you still see the loop, another endpoint
+in your app is refreshing the session during a Server Action. Look for `getSession` calls
+without `disableRefresh`, or custom middleware that touches auth cookies.
+
+See [issue #139](https://github.com/payload-auth/payload-auth/issues/139).
+
+## `BetterAuth plugin not initialized`
+
+`getPayloadAuth` throws this when `payload.betterAuth` is missing. Either:
+
+- `betterAuthPlugin()` is not in your Payload config's `plugins` array, or
+- `disabled: true` is set, or
+- you imported a different Payload config than the one the plugin is registered on.
+
+## `Collection <model> does not exist`
+
+The adapter resolved a Better Auth model to a Payload slug that is not registered.
+
+Using the plugin, this usually means you renamed a collection somewhere the rename did not
+propagate — check that `users.slug` matches `admin.user` in your Payload config. Using the
+adapter standalone, it means a `modelName` is missing or wrong; see
+[Adapter](/docs/reference/adapter).
+
+## Admin components fail to load
+
+Symptoms range from a blank login view to import errors mentioning
+`payload-auth/better-auth/plugin/client` or `#RSCRedirect`.
+
+The import map is stale. Regenerate it:
+
+```bash
+pnpm payload generate:importmap
+```
+
+Run this after installing the plugin and after any change to `admin.loginMethods`,
+`socialProviders`, or which Better Auth plugins are enabled.
+
+## Social login redirects to the wrong URL
+
+Better Auth builds callback URLs from `baseURL`. If `NEXT_PUBLIC_BETTER_AUTH_URL` does not
+match the origin the browser sees — http vs https, with or without `www`, a proxy in
+front — the callback fails.
+
+Check that `baseURL` and `trustedOrigins` both match the real origin, and that the
+provider's registered redirect URI is exactly
+`<baseURL>/api/auth/callback/<provider>`.
+
+## Signed in on the frontend but blocked from `/admin`
+
+The session is valid; the roles are not. Admin access requires one of the user's roles to
+appear in `users.adminRoles`. Open the user in the admin panel — or query it — and confirm
+the `role` array contains an admin role.
+
+Remember `role` is a multi-select: `['admin']`, not `'admin'`.
+
+## Sign-in succeeds but the session is empty
+
+Usually the cookie cache. If you marked large fields `saveToJWT: true`, the session cookie
+can exceed the browser's ~4 KB limit and be dropped silently.
+
+Reduce the cached field set, or turn `session.cookieCache` off to confirm the diagnosis.
+See [Sessions and cookies](/docs/concepts/sessions).
+
+## Cannot sign in after enabling email verification
+
+With `requireEmailVerification: true`, sign-in is blocked until the address is verified. In
+development there is usually no email transport, so log the URL instead of sending it and
+open it manually:
+
+```ts
+emailVerification: {
+  sendOnSignUp: true,
+  async sendVerificationEmail({ user, url }) {
+    console.log('Verify email for', user.email, url)
+  },
+},
+```
+
+## The invite email is never sent
+
+`POST /api/users/send-invite` returns 500 and logs that the send function is missing when
+`adminInvitations.sendInviteEmail` is not configured. Generating a link and sharing it
+manually still works. See [Admin invitations](/docs/guides/admin-invitations).
+
+## A user is locked out of 2FA
+
+If they lost both their authenticator and their backup codes, delete their `twoFactors`
+record and uncheck `twoFactorEnabled` on their user document in the admin panel.
+
+## Missing tables after enabling a plugin
+
+Enabling a Better Auth plugin adds collections, which means new tables. Create and run a
+migration:
+
+```bash
+pnpm payload migrate:create
+pnpm payload migrate
+```
+
+## Type errors on `betterAuthOptions`
+
+**`Object literal may only specify known properties … 'database'`** — the plugin supplies
+the database adapter, so its `BetterAuthOptions` type has `database` removed. Delete it.
+
+**`api` or `$Infer` typed too loosely** — pass your options type as the generic:
+`getPayloadAuth<PayloadAuthConfig>(configPromise)`, where `PayloadAuthConfig` is
+`typeof payloadAuthOptions` declared with `satisfies` rather than a type annotation.
+
+## Turning on debug logging
+
+```ts
+betterAuthPlugin({
+  debug: {
+    enableDebugLogs: true, // every adapter call, in and out
+    logTables: true,       // tables Better Auth needs, on init
+  },
+})
+```
+
+Both are verbose. Leave them off in production.
+
+## Still stuck
+
+Open an issue at
+[github.com/payload-auth/payload-auth/issues](https://github.com/payload-auth/payload-auth/issues)
+with your `payload-auth`, `payload` and `better-auth` versions, your database adapter, and
+the relevant part of your plugin options with secrets removed.

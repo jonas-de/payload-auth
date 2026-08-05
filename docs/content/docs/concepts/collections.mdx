@@ -1,0 +1,167 @@
+---
+title: Collections
+description: Which Payload collections payload-auth generates, and how to rename, hide or extend them.
+---
+
+The plugin generates Payload collections from the Better Auth schema. You do not declare
+them in `buildConfig` — they are injected during config transformation, merged with any
+collection you already defined under the same slug.
+
+## Base collections
+
+These four are always created:
+
+| Slug | Better Auth model | Contents |
+| --- | --- | --- |
+| `users` | `user` | email, name, image, `emailVerified`, `role`, ban state |
+| `sessions` | `session` | token, `expiresAt`, IP address, user agent, `user` relationship |
+| `accounts` | `account` | provider ID, account ID, OAuth tokens, `user` relationship |
+| `verifications` | `verification` | identifier, value, `expiresAt` |
+
+Plus one that has no Better Auth equivalent:
+
+| Slug | Contents |
+| --- | --- |
+| `admin-invitations` | role, token, generated URL, `expiresAt` |
+
+## Plugin collections
+
+Enabling a Better Auth plugin that needs storage adds its collections automatically:
+
+| Better Auth plugin | Collections |
+| --- | --- |
+| `twoFactor` | `twoFactors` |
+| `passkey` | `passkeys` |
+| `apiKey` | `apiKeys` |
+| `organization` | `organizations`, `members`, `invitations`, `organizationRoles` |
+| `organization` with `teams.enabled` | `teams`, `teamMembers` |
+| `sso` | `ssoProviders` |
+| `oidc` | `oauthApplications`, `oauthAccessTokens`, `oauthConsents` |
+| `deviceAuthorization` | `deviceCode` |
+| `stripe` | `subscriptions` |
+| `scim` | `scimProvider` |
+| `jwt` | `jwks` |
+| database rate limiting | `rateLimit` |
+
+## Field mapping
+
+Better Auth field keys are not always the Payload field names. Foreign keys in particular
+become real Payload relationships:
+
+| Model | Better Auth key | Payload field |
+| --- | --- | --- |
+| `session` | `userId` | `user` |
+| `account` | `userId` | `user` |
+| `twoFactor`, `passkey`, `ssoProvider` | `userId` | `user` |
+| `member` | `organizationId`, `userId`, `teamId` | `organization`, `user`, `team` |
+| `invitation` | `organizationId`, `inviterId`, `teamId` | `organization`, `inviter`, `team` |
+| `team` | `organizationId` | `organization` |
+
+The plugin rewrites Better Auth's `fields` config to match, so `session.userId` in Better
+Auth code resolves to the `user` relationship in Payload. Scalar types map as expected:
+`string` → `text`, `number` → `number`, `boolean` → `checkbox`, `date` → `date`.
+
+## Renaming a collection
+
+Set `slug`. This changes both the Payload slug and the Better Auth `modelName`, so the two
+stay in sync:
+
+```ts
+betterAuthPlugin({
+  users: { slug: 'members' },
+  sessions: { slug: 'user-sessions' },
+})
+```
+
+If you rename `users`, update `admin.user` in your Payload config to match.
+
+## Hiding collections
+
+Hide individual collections from the admin sidebar:
+
+```ts
+betterAuthPlugin({
+  sessions: { hidden: true },
+  verifications: { hidden: true },
+})
+```
+
+Or hide every plugin-generated collection (passkeys, two-factors, api-keys, and so on) in
+one go:
+
+```ts
+betterAuthPlugin({ hidePluginCollections: true })
+```
+
+Base collections are grouped under **Auth** in the sidebar. Change that with
+`collectionAdminGroup`.
+
+## Extending a collection
+
+Every collection accepts a `collectionOverrides` function that receives the built config
+and returns a modified one. Use it to add fields, change access control, attach hooks, or
+adjust admin metadata:
+
+```ts
+betterAuthPlugin({
+  users: {
+    collectionOverrides: ({ collection }) => ({
+      ...collection,
+      fields: [
+        ...collection.fields,
+        {
+          name: 'bio',
+          type: 'textarea',
+          saveToJWT: false,
+        },
+      ],
+      admin: {
+        ...collection.admin,
+        defaultColumns: ['email', 'name', 'role'],
+      },
+    }),
+  },
+})
+```
+
+For plugin collections, use `pluginCollectionOverrides`, keyed by collection:
+
+```ts
+betterAuthPlugin({
+  pluginCollectionOverrides: {
+    organizations: ({ collection }) => ({
+      ...collection,
+      admin: { ...collection.admin, group: 'Tenancy' },
+    }),
+  },
+})
+```
+
+<Callout type="warn" title="Do not remove generated fields">
+Adding fields is safe. Removing or renaming a field that Better Auth writes to will break
+the adapter at runtime, because the schema mapping still expects it.
+</Callout>
+
+## Adding custom fields Better Auth can read
+
+To let Better Auth read and write a field you added, declare it in Better Auth's
+`user.additionalFields` as well:
+
+```ts
+export const betterAuthOptions = {
+  user: {
+    additionalFields: {
+      bio: { type: 'string', required: false },
+    },
+  },
+} satisfies BetterAuthOptions
+```
+
+Use `inferAdditionalFields()` on the client so the field is typed there too.
+
+## Defining a collection yourself
+
+If you declare a collection with a slug the plugin also generates, the plugin merges
+yours as the base and layers its own fields, hooks, endpoints and access control on top.
+This is useful for keeping your custom fields in a normal collection file, but
+`collectionOverrides` gives you the last word and is usually clearer.

@@ -1,0 +1,115 @@
+---
+title: Admin panel integration
+description: How payload-auth replaces Payload's auth views and what it changes in the admin UI.
+---
+
+The plugin rewrites `config.admin` so the Payload admin panel authenticates through Better
+Auth rather than Payload's own login.
+
+## Replaced views
+
+| Route | Component | Condition |
+| --- | --- | --- |
+| `/admin/login` | `AdminLogin` | always |
+| `/admin/signup` | `AdminSignup` | always (requires `?token=`) |
+| `/admin/forgot-password` | `ForgotPassword` | always |
+| `/admin/reset-password` | `ResetPassword` | always |
+| `/admin/two-factor-verify` | `TwoFactorVerify` | `twoFactor` plugin enabled |
+
+`admin.routes.login` is set to `/login-redirect`. A `RSCRedirect` component is prepended
+to `admin.components.afterLogin` and forwards to `/admin/login`, which keeps Payload's own
+login screen out of the flow. The logout button is replaced with one that ends the Better
+Auth session.
+
+Because these are React components resolved through Payload's import map, run
+`payload generate:importmap` after installing the plugin and after changing which login
+methods or Better Auth plugins are enabled.
+
+## Login methods shown
+
+The login and signup views render buttons for the methods in `admin.loginMethods`. If you
+do not set it, the plugin infers the list:
+
+- every key of `betterAuthOptions.socialProviders`
+- `emailPassword`, when `emailAndPassword.enabled` is true
+- `passkey`, when the `passkey` plugin is enabled
+
+Override it to show a different set — for example, an admin panel that only accepts
+passkeys even though the public app also allows email and password:
+
+```ts
+betterAuthPlugin({
+  admin: { loginMethods: ['passkey'] },
+})
+```
+
+Valid values are `emailPassword`, `magicLink`, `emailOTP`, `phonePassword`, `phoneOTP`,
+`phoneMagicLink`, `passkey`, and the social providers: `apple`, `discord`, `facebook`,
+`github`, `google`, `linkedin`, `microsoft`, `spotify`, `tiktok`, `twitter`, `twitch`,
+`zoom`, `gitlab`, `roblox`, `vk`, `kick`, `reddit`.
+
+<Callout title="This controls the admin UI only">
+`admin.loginMethods` changes which buttons the admin views render. It does not enable or
+disable providers — that is `betterAuthOptions`. Your frontend is unaffected.
+</Callout>
+
+## Username login
+
+With the Better Auth `username` plugin enabled, the login views also accept a username.
+Which identifiers appear is driven by Payload's `auth.loginWithUsername` on your users
+collection:
+
+- `loginWithUsername: true` → email and username
+- `loginWithUsername: { allowEmailLogin: false }` → username only
+
+## Secrets and the admin HTML
+
+The views receive your plugin options as server props, and Payload serialises server props
+into the RSC payload of the admin HTML — meaning anything passed there is visible to
+anyone who loads the page. The plugin strips `secret` and every
+`socialProviders[*].clientSecret` before handing options to the views.
+
+This only covers what the plugin passes. If you put credentials somewhere else in your
+plugin options, they are not stripped. Keep secrets in environment variables.
+
+## User management buttons
+
+The users collection gains two pieces of UI:
+
+- **Invite button**, in the collection's description area. Generates an admin invitation
+  link — see [Admin invitations](/docs/guides/admin-invitations).
+- **Admin actions tab**, on the user edit view: *Impersonate*, *Revoke All Sessions*, and
+  *Ban* / *Unban*. This tab only appears when the Better Auth `admin` plugin is enabled,
+  since it drives Better Auth's admin API.
+
+Impersonating redirects to `/` acting as the target user. The ban state is stored in the
+`banned` and `banReason` fields on the user document, and a banned user is rejected by the
+auth strategy, so they cannot reach the panel.
+
+## Two-factor challenge
+
+When the `twoFactor` plugin is enabled, a sign-in that requires a second factor redirects
+to `/admin/two-factor-verify`, which accepts a TOTP code or a backup code. Configure the
+client redirect target too:
+
+```ts
+twoFactorClient({
+  onTwoFactorRedirect() {
+    window.location.href = '/two-factor'
+  },
+})
+```
+
+## Reusing the plugin's components
+
+The admin components are exported for use in your own screens:
+
+```tsx
+import { AdminInviteButton, LogoutButton, TwoFactorAuth } from 'payload-auth/better-auth/plugin/client'
+```
+
+```tsx
+import { AdminLogin, Passkeys } from 'payload-auth/better-auth/plugin/rsc'
+```
+
+See [Exports](/docs/reference/exports) for the full list.

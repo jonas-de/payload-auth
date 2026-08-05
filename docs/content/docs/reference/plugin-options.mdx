@@ -1,0 +1,260 @@
+---
+title: Plugin options
+description: Every option accepted by betterAuthPlugin().
+---
+
+`betterAuthPlugin(options: PayloadAuthOptions)` returns a Payload config transformer.
+
+```ts
+import { betterAuthPlugin, type PayloadAuthOptions } from 'payload-auth/better-auth'
+```
+
+## Top level
+
+<TypeTable
+  type={{
+    disabled: {
+      type: 'boolean',
+      default: 'false',
+      description: 'Return the Payload config untouched. Nothing is generated and no admin views are replaced.',
+    },
+    hidePluginCollections: {
+      type: 'boolean',
+      default: 'false',
+      description: 'Hide every plugin-generated collection (passkeys, two-factors, api-keys, …) from the admin sidebar.',
+    },
+    collectionAdminGroup: {
+      type: 'string',
+      default: '"Auth"',
+      description: 'Sidebar group the generated collections are placed in.',
+    },
+    requireAdminInviteForSignUp: {
+      type: 'boolean',
+      default: 'false',
+      description: 'Require a valid admin invitation for every public sign-up, across email/password and all social providers.',
+    },
+    betterAuthOptions: {
+      type: 'BetterAuthOptions',
+      description: "Better Auth's options, minus `database` which the plugin supplies.",
+    },
+    admin: {
+      type: '{ loginMethods?: LoginMethod[] }',
+      description: 'Which login buttons the admin views render. Inferred from your providers and plugins when omitted.',
+    },
+    debug: {
+      type: '{ enableDebugLogs?: boolean; logTables?: boolean }',
+      description: 'Log every adapter call, and/or the tables Better Auth requires on init.',
+    },
+    pluginCollectionOverrides: {
+      type: 'Record<PluginCollection, ({ collection }) => CollectionConfig>',
+      description: 'Modify collections generated for Better Auth plugins.',
+    },
+  }}
+/>
+
+### `admin.loginMethods`
+
+Valid values:
+
+`emailPassword`, `magicLink`, `emailOTP`, `phonePassword`, `phoneOTP`, `phoneMagicLink`,
+`passkey`, and the social providers `apple`, `discord`, `facebook`, `github`, `google`,
+`linkedin`, `microsoft`, `spotify`, `tiktok`, `twitter`, `twitch`, `zoom`, `gitlab`,
+`roblox`, `vk`, `kick`, `reddit`.
+
+If you leave it unset, the plugin infers the list from `socialProviders`,
+`emailAndPassword.enabled` and the presence of the `passkey` plugin.
+
+### `pluginCollectionOverrides` keys
+
+`subscriptions`, `apiKeys`, `jwks`, `twoFactors`, `passkeys`, `oauthApplications`,
+`oauthAccessTokens`, `oauthConsents`, `ssoProviders`, `organizations`,
+`organizationRoles`, `invitations`, `members`, `teams`, `teamMembers`, `scimProvider`,
+`rateLimit`, `deviceCode`.
+
+<Callout title="Runtime-validated only">
+TypeScript cannot tell which Better Auth plugins you enabled, so it will let you configure
+a collection that does not exist. That is validated at runtime.
+</Callout>
+
+## `users`
+
+<TypeTable
+  type={{
+    slug: {
+      type: 'string',
+      default: '"users"',
+      description: 'Payload collection slug and Better Auth `user` modelName. Must match `admin.user` in your Payload config.',
+    },
+    roles: {
+      type: 'string[]',
+      default: '["user"]',
+      description: 'All selectable roles. Merged with `adminRoles`.',
+    },
+    adminRoles: {
+      type: 'string[]',
+      default: '["admin"]',
+      description: 'Roles granted admin access to the auth collections. Also passed to the Better Auth admin plugin.',
+    },
+    defaultRole: {
+      type: 'string',
+      default: '"user"',
+      description: 'Default value of the role field. Must appear in `roles`.',
+    },
+    defaultAdminRole: {
+      type: 'string',
+      default: '"admin"',
+      description: 'Role given to the first admin and to invited admins.',
+    },
+    allowedFields: {
+      type: 'string[]',
+      default: "['name']",
+      description: 'Fields a non-admin user may update on their own document. Password changes are handled separately.',
+    },
+    hidden: {
+      type: 'boolean',
+      description: 'Hide the collection from the admin sidebar.',
+    },
+    collectionOverrides: {
+      type: '({ collection }) => CollectionConfig',
+      description: 'Modify the built collection config.',
+    },
+  }}
+/>
+
+## `accounts`, `sessions`, `verifications`
+
+All three take the same shape:
+
+<TypeTable
+  type={{
+    slug: {
+      type: 'string',
+      description: 'Payload slug and Better Auth modelName. Defaults to "accounts" / "sessions" / "verifications".',
+    },
+    hidden: {
+      type: 'boolean',
+      description: 'Hide the collection from the admin sidebar.',
+    },
+    collectionOverrides: {
+      type: '({ collection }) => CollectionConfig',
+      description: 'Modify the built collection config.',
+    },
+  }}
+/>
+
+## `adminInvitations`
+
+<TypeTable
+  type={{
+    slug: {
+      type: 'string',
+      default: '"admin-invitations"',
+      description: 'Payload collection slug.',
+    },
+    hidden: {
+      type: 'boolean',
+      description: 'Hide the collection from the admin sidebar.',
+    },
+    generateInviteUrl: {
+      type: '({ payload, token }) => string',
+      description: 'Build the invitation URL. Defaults to `<adminURL>/signup?token=<token>`.',
+    },
+    sendInviteEmail: {
+      type: '({ payload, email, url }) => Promise<{ success: true; message?: string } | { success: false; message: string }>',
+      description: 'Deliver the invitation email. Required for the send-invite endpoint to work.',
+    },
+    collectionOverrides: {
+      type: '({ collection }) => CollectionConfig',
+      description: 'Modify the built collection config.',
+    },
+  }}
+/>
+
+## `betterAuthOptions`
+
+This is Better Auth's own options object with `database` removed — the plugin supplies the
+adapter. Everything else behaves as the
+[Better Auth options reference](https://www.better-auth.com/docs/reference/options)
+describes.
+
+The plugin rewrites parts of it before handing it to Better Auth:
+
+- `user`, `session`, `account` and `verification` `modelName` are set to your Payload slugs.
+- `session.fields.userId` and `account.fields.userId` are pointed at the `user` relationship.
+- `emailAndPassword.enabled` defaults to `true`.
+- Supported plugins get their `modelName` and field mappings configured.
+- `saveToJWT: false` on Payload fields is mirrored onto the returned-field set, so excluded
+  fields never reach the cookie cache.
+
+## A worked example
+
+```ts title="src/lib/auth/options.ts"
+import type { BetterAuthOptions, PayloadAuthOptions } from 'payload-auth/better-auth'
+import { admin, organization, twoFactor } from 'better-auth/plugins'
+import { passkey } from '@better-auth/passkey'
+import { nextCookies } from 'better-auth/next-js'
+
+export const betterAuthOptions = {
+  appName: 'my-app',
+  baseURL: process.env.NEXT_PUBLIC_BETTER_AUTH_URL,
+  trustedOrigins: [process.env.NEXT_PUBLIC_BETTER_AUTH_URL!],
+  emailAndPassword: {
+    enabled: true,
+    requireEmailVerification: true,
+    async sendResetPassword({ user, url }) {
+      await sendEmail({ to: user.email, subject: 'Reset your password', html: url })
+    },
+  },
+  emailVerification: {
+    sendOnSignUp: true,
+    autoSignInAfterVerification: true,
+    async sendVerificationEmail({ user, url }) {
+      await sendEmail({ to: user.email, subject: 'Verify your email', html: url })
+    },
+  },
+  socialProviders: {
+    google: {
+      clientId: process.env.GOOGLE_CLIENT_ID as string,
+      clientSecret: process.env.GOOGLE_CLIENT_SECRET as string,
+    },
+  },
+  session: {
+    cookieCache: { enabled: true, maxAge: 5 * 60 },
+  },
+  account: {
+    accountLinking: { enabled: true, trustedProviders: ['google'] },
+  },
+  plugins: [
+    admin(),
+    twoFactor({ issuer: 'my-app' }),
+    passkey({ rpID: 'localhost', rpName: 'My App', origin: 'http://localhost:3000' }),
+    organization({ teams: { enabled: true } }),
+    nextCookies(), // keep last
+  ],
+} satisfies BetterAuthOptions
+
+export const payloadAuthOptions = {
+  hidePluginCollections: true,
+  collectionAdminGroup: 'Auth',
+  users: {
+    slug: 'users',
+    roles: ['user', 'editor', 'admin'],
+    adminRoles: ['admin'],
+    defaultRole: 'user',
+    defaultAdminRole: 'admin',
+    allowedFields: ['name', 'image'],
+  },
+  adminInvitations: {
+    async sendInviteEmail({ payload, email, url }) {
+      await payload.sendEmail({ to: email, subject: 'You are invited', html: url })
+      return { success: true }
+    },
+  },
+  betterAuthOptions,
+} satisfies PayloadAuthOptions
+
+export type PayloadAuthConfig = typeof payloadAuthOptions
+```
+
+Using `satisfies` rather than `:` preserves the literal types, which is what makes
+`getPayloadAuth<PayloadAuthConfig>()` infer your plugin set and role union correctly.

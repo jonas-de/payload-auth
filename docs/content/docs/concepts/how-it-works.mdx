@@ -1,0 +1,114 @@
+---
+title: How it works
+description: The architecture behind payload-auth — a database adapter, a config transformer, and a Payload auth strategy.
+---
+
+`payload-auth` is deliberately thin. It never forks or patches Better Auth. Instead it
+does three things:
+
+1. Gives Better Auth a **database adapter** that speaks Payload's Local API.
+2. **Generates Payload collections** from the Better Auth schema so those records are
+   editable in the admin panel.
+3. Registers a **Payload auth strategy** so the admin panel trusts Better Auth sessions.
+
+```
+Better Auth client
+        │  HTTP + cookies
+        ▼
+Better Auth core            ← never modified
+        │  DBAdapter interface
+        ▼
+Payload adapter             ← payload-auth
+        │  Local API, depth: 0
+        ▼
+Payload CMS ──▶ your database
+```
+
+Because Better Auth core is untouched, every documented Better Auth endpoint, plugin and
+client method behaves exactly as its own docs describe.
+
+## Initialisation
+
+`betterAuthPlugin(options)` returns a Payload config transformer. When Payload builds its
+config, the plugin:
+
+1. Applies `setLoginMethods` — infers which login buttons the admin views should show from
+   your enabled providers and plugins, unless you set `admin.loginMethods` explicitly.
+2. Derives the default Better Auth schema for the models your plugins require.
+3. Builds Payload collections from that schema (**pass 1**).
+4. Reconciles the schema with the collections that were actually produced — picking up any
+   slug you overrode.
+5. Builds the collections again with the resolved schema (**pass 2**).
+6. Runs `sanitizeBetterAuthOptions`, which rewrites `modelName` and field mappings so
+   Better Auth addresses your real Payload slugs and field names.
+7. Replaces the admin auth views and injects the collections into the config.
+8. Registers an `onInit` hook.
+
+<Callout title="Why build collections twice?">
+Hooks and endpoints need the *final* slugs of collections other than their own. The user
+collection's `beforeDelete` hook, for example, cascades into sessions, accounts and
+passkeys. Pass 1 establishes the slugs; pass 2 rebuilds with correct cross-references.
+</Callout>
+
+When Payload boots, `onInit` calls `betterAuth()` with the sanitized options and the
+Payload adapter, then attaches the result to `payload.betterAuth` as a non-writable
+property.
+
+## The adapter
+
+The adapter implements Better Auth's `DBAdapter` interface. Every operation follows the
+same shape: resolve the Payload client, map the Better Auth model name to a collection
+slug, translate the query, call the Local API, translate the result back.
+
+| Better Auth method | Payload API |
+| --- | --- |
+| `create` | `payload.create()` |
+| `findOne` | `payload.findByID()` or `payload.find({ limit: 1 })` |
+| `findMany` | `payload.find()` |
+| `update` / `updateMany` | `payload.update()` |
+| `delete` / `deleteMany` | `payload.delete()` |
+| `count` | `payload.count()` |
+
+A `where` clause that is just `id equals X` is detected and routed to `findByID`, which is
+the faster path.
+
+### Translation
+
+Because Payload and Better Auth disagree on names, types and shapes, a transform layer
+sits between them:
+
+- **Field names.** Better Auth's `userId` becomes Payload's `user` relationship field on
+  `sessions` and `accounts`; the reverse mapping is applied on the way out.
+- **IDs.** Better Auth expects strings. Payload may use numeric IDs (Postgres) or text IDs
+  (Mongo). The adapter stringifies on output and converts back on input, driven by
+  `payload.db.defaultIDType`.
+- **Operators.** `eq` → `equals`, `ne` → `not_equals`, `gt` → `greater_than`,
+  `starts_with` / `ends_with` → `like`, and so on.
+- **Dates.** Payload returns ISO strings; Better Auth wants `Date` objects.
+- **Depth.** Every query runs at `depth: 0`, so relationships come back as raw IDs rather
+  than populated documents. This keeps responses in the shape Better Auth expects and
+  keeps session cookies small.
+
+## The Payload auth strategy
+
+The generated `users` collection declares a custom auth strategy. On each authenticated
+admin request it calls `betterAuth.api.getSession({ headers })` with
+`query: { disableRefresh: true }`, then loads the full user document from Payload.
+
+`disableRefresh` matters. The strategy runs on every admin request; if it were allowed to
+refresh the session, each refresh would emit a `Set-Cookie`. With `nextCookies()` in your
+plugin list that cookie is written via `cookies().set()` inside a Server Action, which
+invalidates the Next.js router cache, triggers a re-render, and calls the strategy
+again — an infinite `buildFormState` loop. Sessions still refresh normally on real Better
+Auth endpoints and on the plugin's `/refresh-token` endpoint.
+
+Banned or otherwise locked users resolve to `null`, so they cannot reach the panel.
+
+## Layers at a glance
+
+| Layer | Responsibility |
+| --- | --- |
+| Configuration | `PayloadAuthOptions` → collections + sanitized `BetterAuthOptions` |
+| Plugin | Config transformation, `onInit`, auth strategy |
+| Adapter | Translate `DBAdapter` calls to the Payload Local API |
+| Admin UI | Login, signup, password reset and 2FA views |

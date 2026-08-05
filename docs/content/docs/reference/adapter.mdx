@@ -1,0 +1,162 @@
+---
+title: Adapter
+description: The Better Auth database adapter that talks to Payload's Local API.
+---
+
+`payloadAdapter` implements Better Auth's `DBAdapter` interface on top of Payload's Local
+API. `betterAuthPlugin` installs it for you — you only construct it directly when using
+Better Auth with Payload storage but without the plugin.
+
+```ts
+import { payloadAdapter } from 'payload-auth/better-auth/adapter'
+```
+
+## Signature
+
+```ts
+payloadAdapter({
+  payloadClient: BasePayload | Promise<BasePayload> | (() => Promise<BasePayload>),
+  adapterConfig: {
+    idType: 'number' | 'text'
+    enableDebugLogs?: boolean
+  },
+}): DBAdapterInstance
+```
+
+<TypeTable
+  type={{
+    payloadClient: {
+      type: 'BasePayload | Promise<BasePayload> | (() => Promise<BasePayload>)',
+      description: 'The Payload instance. A function or promise is allowed so the client can be resolved lazily; the result is cached after the first call.',
+    },
+    idType: {
+      type: "'number' | 'text'",
+      description: 'How your database represents IDs. Use `payload.db.defaultIDType` — numeric for Postgres, text for MongoDB.',
+    },
+    enableDebugLogs: {
+      type: 'boolean',
+      default: 'false',
+      description: 'Log every database call with its inputs and outputs under the [payload-db-adapter] prefix.',
+    },
+  }}
+/>
+
+## Standalone usage
+
+```ts title="src/lib/auth.ts"
+import { betterAuth } from 'better-auth'
+import { payloadAdapter } from 'payload-auth/better-auth/adapter'
+import type { BasePayload } from 'payload'
+
+export function auth(payload: BasePayload) {
+  return betterAuth({
+    database: payloadAdapter({
+      payloadClient: payload,
+      adapterConfig: { idType: payload.db.defaultIDType },
+    }),
+    user: { modelName: 'users' },
+    session: {
+      modelName: 'sessions',
+      fields: { userId: 'user' },
+    },
+    account: {
+      modelName: 'accounts',
+      fields: { userId: 'user' },
+    },
+    verification: { modelName: 'verifications' },
+  })
+}
+```
+
+Better Auth is constructed per-request from a Payload instance, which is why this is a
+function rather than a module-level constant.
+
+<Callout type="warn" title="You own the mapping">
+Without the plugin, nothing rewrites `modelName` or field names for you. Payload slugs are
+usually plural (`users`, `sessions`) while Better Auth models are singular, and foreign
+keys become relationships (`userId` → `user`). Every mapping must be declared, or the
+adapter will fail to find collections and fields at runtime.
+</Callout>
+
+## What the adapter translates
+
+**Collection slugs.** Better Auth model names are resolved to Payload slugs. A missing
+collection throws `BetterAuthError: Collection <model> does not exist`.
+
+**IDs.** Better Auth expects strings everywhere. Payload may use numbers. The adapter
+stringifies on output and converts back on input, using `idType`.
+
+**Field names.** Configured `fields` mappings are applied on the way in and reversed on the
+way out, so Better Auth always sees `userId` even though Payload stores `user`.
+
+**Operators.**
+
+| Better Auth | Payload |
+| --- | --- |
+| `eq` | `equals` |
+| `ne` | `not_equals` |
+| `gt` | `greater_than` |
+| `gte` | `greater_than_equal` |
+| `lt` | `less_than` |
+| `lte` | `less_than_equal` |
+| `in` | `in` |
+| `contains` | `contains` |
+| `starts_with` | `like` |
+| `ends_with` | `like` |
+
+**Dates.** ISO strings from Payload become `Date` objects.
+
+**Depth.** Every query runs at `depth: 0`, so relationships come back as raw IDs rather
+than populated documents.
+
+## Methods
+
+| Method | Payload API |
+| --- | --- |
+| `create` | `payload.create()` |
+| `findOne` | `payload.findByID()` when the where clause is `id equals X`, otherwise `payload.find({ limit: 1 })` |
+| `findMany` | `payload.find()` |
+| `update` | `payload.update()` by ID when possible, otherwise by where |
+| `updateMany` | `payload.update({ where })` |
+| `delete` | `payload.delete()` |
+| `deleteMany` | `payload.delete({ where })` |
+| `count` | `payload.count()` |
+
+## `generateSchema(options, config)`
+
+```ts
+function generateSchema(
+  options: BetterAuthOptions,
+  config?: { outputDir: string },  // default './generated'
+): Promise<string>
+```
+
+Writes `schema.ts` into `outputDir` containing Payload collection configs derived from your
+Better Auth options, merging with any existing file. Returns the generated source.
+
+```ts title="src/bin/schema-gen.ts"
+import { generateSchema } from 'payload-auth/better-auth/adapter'
+import { betterAuthOptions } from '@/lib/auth/options'
+
+await generateSchema(betterAuthOptions, { outputDir: './src/payload/schema' })
+```
+
+You do not need this when using `betterAuthPlugin` — it builds collections in memory. Treat
+the output as a starting point and review access control before shipping.
+
+## Debugging
+
+```ts
+payloadAdapter({
+  payloadClient: payload,
+  adapterConfig: { idType: payload.db.defaultIDType, enableDebugLogs: true },
+})
+```
+
+Through the plugin, the equivalent is:
+
+```ts
+betterAuthPlugin({ debug: { enableDebugLogs: true } })
+```
+
+Errors are always logged, regardless of the flag.

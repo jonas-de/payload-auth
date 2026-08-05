@@ -1,25 +1,10 @@
-import { DocsLayout } from "fumadocs-ui/layouts/docs";
-import type { ReactNode } from "react";
-import { docsOptions } from "../layout.config";
-import Sidebar from "@/components/layout/sidebar";
-import { cn } from "@/lib/utils";
+import { source } from '@/lib/source';
+import { DocsLayout } from 'fumadocs-ui/layouts/docs';
+import { baseOptions } from '@/lib/layout.shared';
 
-export default function Layout({ children }: { children: ReactNode }) {
+export default function Layout({ children }: LayoutProps<'/docs'>) {
   return (
-    <DocsLayout
-      {...docsOptions}
-      sidebar={{
-        component: (
-          <div
-            className={cn(
-              "[--fd-tocnav-height:36px] md:mr-[268px] xl:[--fd-toc-width:286px] xl:[--fd-tocnav-height:0px] "
-            )}
-          >
-            <Sidebar />
-          </div>
-        ),
-      }}
-    >
+    <DocsLayout tree={source.getPageTree()} {...baseOptions()}>
       {children}
     </DocsLayout>
   );
