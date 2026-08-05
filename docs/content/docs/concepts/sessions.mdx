@@ -1,0 +1,137 @@
+---
+title: Sessions and cookies
+description: How Better Auth sessions work through Payload, including the cookie cache and saveToJWT.
+---
+
+Sessions are Better Auth sessions. Payload does not issue its own — the `users` collection
+uses a custom auth strategy that resolves the Better Auth session on every request.
+
+## The flow
+
+1. The client hits a Better Auth endpoint (`/api/auth/sign-in/email`, for example).
+2. Better Auth verifies credentials, writes a `sessions` document through the adapter, and
+   returns a `Set-Cookie`.
+3. Later requests carry that cookie. Better Auth resolves it to a session; Payload's
+   strategy loads the matching user document.
+
+Because both sides read the same cookie, signing in on your frontend also signs you into
+the admin panel, subject to your `adminRoles`.
+
+## Cookie cache
+
+Better Auth can store a signed copy of the session and user in the cookie itself, avoiding
+a database round trip on every request:
+
+```ts
+export const betterAuthOptions = {
+  session: {
+    cookieCache: {
+      enabled: true,
+      maxAge: 5 * 60, // seconds
+    },
+  },
+} satisfies BetterAuthOptions
+```
+
+What lands in that cookie is controlled by Payload's `saveToJWT` on your collection fields.
+The plugin mirrors `saveToJWT: false` onto Better Auth's returned-field set, so a field you
+exclude in Payload is never serialised into the cookie either.
+
+By default the plugin marks `name`, `emailVerified` and `role` as `saveToJWT: true`, and
+`image`, `createdAt`, `updatedAt` and the `accounts` / `sessions` join fields as `false`.
+Adjust with `collectionOverrides`:
+
+```ts
+betterAuthPlugin({
+  users: {
+    collectionOverrides: ({ collection }) => ({
+      ...collection,
+      fields: collection.fields.map((field) =>
+        'name' in field && field.name === 'image'
+          ? { ...field, saveToJWT: true }
+          : field,
+      ),
+    }),
+  },
+})
+```
+
+<Callout type="warn" title="Cookies have a size limit">
+Browsers cap cookies at roughly 4 KB. Marking large fields `saveToJWT: true` can push the
+session cookie over that limit and break sign-in. Keep the cached set small.
+</Callout>
+
+## Session refresh in the admin panel
+
+Payload's auth strategy calls `getSession` with `disableRefresh: true`, so it reads the
+session without extending it and never emits a `Set-Cookie`. This is deliberate — see
+[How it works](/docs/concepts/how-it-works) for why refreshing there causes an infinite
+render loop when `nextCookies()` is enabled.
+
+Sessions still refresh normally when the client calls Better Auth endpoints directly, and
+through the plugin's `POST /api/users/refresh-token` endpoint.
+
+## Cascade deletes
+
+Deleting a user through Payload runs a `beforeDelete` hook that removes the related
+`sessions`, `accounts`, `passkeys` and `twoFactors` records. Payload does not enforce
+referential integrity, and Better Auth assumes it, so the hook closes that gap.
+
+Deleting a user through Better Auth's own API goes through the adapter and therefore
+triggers the same hook.
+
+## Multi-session and impersonation
+
+The `multiSession` and `admin` plugins work as documented — sessions are just rows in the
+`sessions` collection. Impersonation writes `impersonatedBy` onto the session record, which
+you can see in the admin panel.
+
+```ts
+import { admin, multiSession } from 'better-auth/plugins'
+
+export const betterAuthOptions = {
+  plugins: [admin(), multiSession()],
+} satisfies BetterAuthOptions
+```
+
+## Reading a session
+
+<Tabs items={['Server component', 'Client component', 'Payload local API']}>
+<Tab value="Server component">
+
+```ts
+import { headers } from 'next/headers'
+import { getPayload } from '@/lib/payload'
+
+const payload = await getPayload()
+const session = await payload.betterAuth.api.getSession({
+  headers: await headers(),
+})
+```
+
+</Tab>
+<Tab value="Client component">
+
+```tsx
+'use client'
+import { authClient } from '@/lib/auth/client'
+
+const { data: session, isPending } = authClient.useSession()
+```
+
+</Tab>
+<Tab value="Payload local API">
+
+```ts
+import { headers } from 'next/headers'
+import { getPayload } from '@/lib/payload'
+
+const payload = await getPayload()
+const { user } = await payload.auth({ headers: await headers() })
+```
+
+`payload.auth()` runs the plugin's auth strategy and returns the full Payload user
+document.
+
+</Tab>
+</Tabs>

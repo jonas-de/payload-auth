@@ -1,0 +1,151 @@
+---
+title: Organizations and teams
+description: Multi-tenancy with the Better Auth organization plugin, backed by Payload collections.
+---
+
+The Better Auth `organization` plugin is supported, including teams. Its records become
+ordinary Payload collections with real relationships, so you can browse and edit them in
+the admin panel.
+
+## Enable it
+
+```ts title="src/lib/auth/options.ts"
+import { organization } from 'better-auth/plugins'
+
+export const betterAuthOptions = {
+  plugins: [
+    organization({
+      teams: { enabled: true },
+      async sendInvitationEmail(data) {
+        const url = `${process.env.NEXT_PUBLIC_BETTER_AUTH_URL}/accept-invitation/${data.id}`
+        await sendEmail({ to: data.email, subject: 'You are invited', html: `<a href="${url}">Accept</a>` })
+      },
+    }),
+  ],
+} satisfies BetterAuthOptions
+```
+
+```ts title="src/lib/auth/client.ts"
+import { organizationClient } from 'better-auth/client/plugins'
+
+export const authClient = createAuthClient({
+  plugins: [organizationClient()],
+})
+```
+
+## Collections created
+
+| Slug | Contents |
+| --- | --- |
+| `organizations` | name, slug, logo, metadata |
+| `members` | `user` + `organization` relationships, role |
+| `invitations` | `organization`, `inviter`, email, role, status |
+| `organizationRoles` | custom roles scoped to an organization |
+| `teams` | name, `organization` relationship |
+| `teamMembers` | `team` + `user` relationships |
+
+`teams` and `teamMembers` only appear when `teams.enabled` is true.
+
+Better Auth's `organizationId`, `userId`, `inviterId` and `teamId` keys are mapped to
+Payload relationship fields named `organization`, `user`, `inviter` and `team`. Write
+Payload queries against the Payload names:
+
+```ts
+const members = await payload.find({
+  collection: 'members',
+  where: { organization: { equals: organizationId } },
+})
+```
+
+## Active organization
+
+The active organization is stored on the session record as `activeOrganizationId`:
+
+```ts
+await authClient.organization.setActive({ organizationId })
+```
+
+```ts
+const { data: activeOrg } = authClient.useActiveOrganization()
+const { data: orgs } = authClient.useListOrganizations()
+```
+
+## Permissions
+
+Define an access controller and pass it to the plugin, exactly as Better Auth documents:
+
+```ts
+import { createAccessControl } from 'better-auth/plugins'
+import {
+  defaultStatements,
+  defaultRoles,
+  ownerAc,
+} from 'better-auth/plugins/organization/access'
+
+const ac = createAccessControl({
+  ...defaultStatements,
+  project: ['create', 'share', 'update', 'delete'],
+})
+
+const superAdmin = ac.newRole({
+  project: ['create', 'update'],
+  ...ownerAc.statements,
+})
+
+export const betterAuthOptions = {
+  plugins: [
+    organization({ ac, roles: { ...defaultRoles, superAdmin } }),
+  ],
+} satisfies BetterAuthOptions
+```
+
+<Callout title="Organization roles are separate from Payload roles">
+`users.roles` in the plugin options governs the Payload admin panel. Organization roles
+(`owner`, `admin`, `member`, or your own) govern membership within an organization. They
+are independent — a Payload admin is not automatically an organization owner.
+</Callout>
+
+## Scoping your own collections
+
+Add an `organization` relationship to your collections and filter on it in access control:
+
+```ts title="src/collections/projects.ts"
+import type { CollectionConfig } from 'payload'
+
+export const Projects: CollectionConfig = {
+  slug: 'projects',
+  access: {
+    read: async ({ req }) => {
+      if (!req.user) return false
+      const members = await req.payload.find({
+        collection: 'members',
+        where: { user: { equals: req.user.id } },
+        depth: 0,
+      })
+      const orgIds = members.docs.map((m) => m.organization)
+      return { organization: { in: orgIds } }
+    },
+  },
+  fields: [
+    { name: 'name', type: 'text', required: true },
+    {
+      name: 'organization',
+      type: 'relationship',
+      relationTo: 'organizations',
+      required: true,
+    },
+  ],
+}
+```
+
+## Types
+
+```ts title="src/lib/auth/types.ts"
+import type { getPayload } from '@/lib/payload'
+
+type PayloadWithAuth = Awaited<ReturnType<typeof getPayload>>
+
+export type ActiveOrganization =
+  PayloadWithAuth['betterAuth']['$Infer']['ActiveOrganization']
+export type Invitation = PayloadWithAuth['betterAuth']['$Infer']['Invitation']
+```

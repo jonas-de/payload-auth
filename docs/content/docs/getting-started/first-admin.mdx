@@ -1,0 +1,88 @@
+---
+title: Create your first admin
+description: How payload-auth bootstraps the first admin user and what happens on a fresh database.
+---
+
+Payload's usual "create first user" screen is replaced by an invitation-based signup flow.
+On an empty database the plugin bootstraps that invitation for you, so there is nothing to
+configure.
+
+## What happens on a fresh database
+
+1. You open `/admin`. You are not signed in, so Payload redirects to its login route —
+   which the plugin has repointed to `/admin/login-redirect`, then on to `/admin/login`.
+2. The login view counts users whose role equals `users.defaultAdminRole` (default
+   `"admin"`).
+3. If that count is zero, the view creates an `admin-invitations` record with a random
+   token and redirects you to `/admin/signup?token=<token>`.
+4. You fill in the signup form. The token is validated against `admin-invitations`, and
+   the new user is created with the admin role.
+
+If an unused admin invitation already exists, the view reuses its token rather than
+creating another one.
+
+<Callout title="This only happens when there are zero admins">
+Once one user holds the admin role, `/admin/login` stops bootstrapping and renders the
+normal login form. Additional admins must be invited — see
+[Admin invitations](/docs/guides/admin-invitations).
+</Callout>
+
+## Verifying your email in development
+
+If you set `emailVerification.sendOnSignUp: true` (as the
+[installation guide](/docs/getting-started/installation) does), you cannot sign in until
+the address is verified. In development you typically have no real email transport, so log
+the URL instead:
+
+```ts title="src/lib/auth/options.ts"
+emailVerification: {
+  sendOnSignUp: true,
+  autoSignInAfterVerification: true,
+  async sendVerificationEmail({ user, url }) {
+    console.log('Verify email for', user.email, url)
+  },
+},
+```
+
+After signing up, copy the logged URL and open it:
+
+```
+http://localhost:3000/api/auth/verify-email?token=…&callbackURL=/admin
+```
+
+You are verified, signed in, and redirected to the admin panel.
+
+To skip this loop entirely while developing, set `requireEmailVerification: false` and
+`sendOnSignUp: false`.
+
+## Admin routes added by the plugin
+
+The plugin sets `admin.routes.login` to `/login-redirect` and registers these views
+underneath your admin route:
+
+| Route | View | Notes |
+| --- | --- | --- |
+| `/admin/login` | Better Auth login | Bootstraps the first admin when none exists |
+| `/admin/signup` | Invitation signup | Requires a valid `?token=` |
+| `/admin/forgot-password` | Forgot password | |
+| `/admin/reset-password` | Reset password | |
+| `/admin/two-factor-verify` | 2FA challenge | Only when the `twoFactor` plugin is enabled |
+| `/admin/login-redirect` | Internal redirect | Payload's configured login route |
+
+## Creating an admin without the UI
+
+You can promote any user from a script or seed file using Payload's Local API:
+
+```ts
+import { getPayload } from '@/lib/payload'
+
+const payload = await getPayload()
+
+await payload.update({
+  collection: 'users',
+  where: { email: { equals: 'me@example.com' } },
+  data: { role: ['admin'] },
+})
+```
+
+`role` is a multi-select field (`hasMany: true`), so it takes an array.

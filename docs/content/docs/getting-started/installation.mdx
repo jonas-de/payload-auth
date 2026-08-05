@@ -1,0 +1,203 @@
+---
+title: Installation
+description: Install payload-auth and wire it into a Payload CMS + Next.js project.
+---
+
+This guide assumes an existing Payload 3 project running inside Next.js — the layout
+`payload create-payload-app` produces, with `src/payload.config.ts` and the
+`(payload)` route group.
+
+## 1. Install packages
+
+```package-install
+payload-auth better-auth
+```
+
+`better-auth` is a peer dependency, so you install it yourself and control its version.
+
+`@better-auth/passkey` is also currently declared as a required peer, so install it even if
+you do not plan to use passkeys:
+
+```package-install
+@better-auth/passkey
+```
+
+Add the remaining Better Auth packages only if you use them:
+
+```package-install
+@better-auth/api-key @better-auth/sso @better-auth/stripe @better-auth/scim
+```
+
+## 2. Set environment variables
+
+```dotenv title=".env"
+DATABASE_URI=postgres://...
+PAYLOAD_SECRET=your-payload-secret
+
+BETTER_AUTH_SECRET=your-better-auth-secret
+NEXT_PUBLIC_BETTER_AUTH_URL=http://localhost:3000
+```
+
+`NEXT_PUBLIC_BETTER_AUTH_URL` is the public base URL of your app. Better Auth uses it to
+build callback URLs, verification links and cookie domains, so it must match the origin
+the browser actually sees.
+
+## 3. Define your Better Auth options
+
+Keep Better Auth options in their own module. You will import them from your Payload
+config, from `generateSchema`, and (for type inference) from your client.
+
+```ts title="src/lib/auth/options.ts"
+import type { BetterAuthOptions, PayloadAuthOptions } from 'payload-auth/better-auth'
+import { admin, twoFactor } from 'better-auth/plugins'
+import { nextCookies } from 'better-auth/next-js'
+
+export const betterAuthOptions = {
+  appName: 'my-app',
+  baseURL: process.env.NEXT_PUBLIC_BETTER_AUTH_URL,
+  trustedOrigins: [process.env.NEXT_PUBLIC_BETTER_AUTH_URL!],
+  emailAndPassword: {
+    enabled: true,
+    requireEmailVerification: true,
+    async sendResetPassword({ user, url }) {
+      console.log('Reset password for', user.email, url)
+    },
+  },
+  emailVerification: {
+    sendOnSignUp: true,
+    autoSignInAfterVerification: true,
+    async sendVerificationEmail({ user, url }) {
+      console.log('Verify email for', user.email, url)
+    },
+  },
+  socialProviders: {
+    google: {
+      clientId: process.env.GOOGLE_CLIENT_ID as string,
+      clientSecret: process.env.GOOGLE_CLIENT_SECRET as string,
+    },
+  },
+  plugins: [admin(), twoFactor(), nextCookies()],
+} satisfies BetterAuthOptions
+
+export const payloadAuthOptions = {
+  users: {
+    slug: 'users',
+    roles: ['user', 'admin'],
+    adminRoles: ['admin'],
+    defaultRole: 'user',
+    allowedFields: ['name'],
+  },
+  betterAuthOptions,
+} satisfies PayloadAuthOptions
+
+export type PayloadAuthConfig = typeof payloadAuthOptions
+```
+
+<Callout title="Do not set `database`">
+`payload-auth` supplies the `database` adapter itself. The `BetterAuthOptions` type it
+exports is Better Auth's options type with `database` removed, so setting it is a type
+error.
+</Callout>
+
+<Callout type="warn" title="Keep `nextCookies()` last">
+Better Auth requires `nextCookies()` to be the final entry in the `plugins` array.
+</Callout>
+
+## 4. Add the plugin to your Payload config
+
+```ts title="src/payload.config.ts"
+import { buildConfig } from 'payload'
+import { betterAuthPlugin } from 'payload-auth/better-auth'
+import { payloadAuthOptions } from './lib/auth/options'
+
+export default buildConfig({
+  admin: {
+    user: 'users',
+    importMap: { baseDir: path.resolve(dirname) },
+  },
+  collections: [
+    // your own collections — auth collections are added by the plugin
+  ],
+  db: postgresAdapter({ pool: { connectionString: process.env.DATABASE_URI } }),
+  secret: process.env.PAYLOAD_SECRET!,
+  plugins: [betterAuthPlugin(payloadAuthOptions)],
+})
+```
+
+`admin.user` must match `users.slug` (default `'users'`).
+
+You do not declare the auth collections yourself. The plugin builds `users`, `sessions`,
+`accounts`, `verifications`, `admin-invitations`, and one collection for each Better Auth
+plugin that needs storage — see [Collections](/docs/concepts/collections).
+
+## 5. Mount the Better Auth route handler
+
+Better Auth needs its own catch-all route. Reach the auth instance through
+`getPayloadAuth`, which returns Payload with a typed `betterAuth` property attached.
+
+```ts title="src/lib/payload.ts"
+import configPromise from '@payload-config'
+import { getPayloadAuth } from 'payload-auth/better-auth'
+import type { PayloadAuthConfig } from './auth/options'
+
+export const getPayload = async () =>
+  getPayloadAuth<PayloadAuthConfig>(configPromise)
+```
+
+```ts title="src/app/api/auth/[...all]/route.ts"
+import { toNextJsHandler } from 'better-auth/next-js'
+import { getPayload } from '@/lib/payload'
+
+const payload = await getPayload()
+
+export const { POST, GET } = toNextJsHandler(payload.betterAuth)
+```
+
+This must live at `app/api/auth/[...all]` — outside the `(payload)` route group, which
+has its own catch-all handler.
+
+## 6. Regenerate the import map
+
+The plugin registers React components (login views, logout button, admin buttons) into
+Payload's admin panel. Payload resolves them through its import map, so regenerate it
+after installing:
+
+```bash
+pnpm payload generate:importmap
+```
+
+Re-run this any time you change which login methods or Better Auth plugins are enabled.
+
+## 7. Create the database schema
+
+The plugin adds collections, which means new tables.
+
+<Tabs items={['Migrations (recommended)', 'Push (dev only)']}>
+<Tab value="Migrations (recommended)">
+
+```bash
+pnpm payload migrate:create
+pnpm payload migrate
+```
+
+</Tab>
+<Tab value="Push (dev only)">
+
+Set `push: true` on your database adapter and Payload syncs the schema on boot. Convenient
+locally, unsafe for production.
+
+</Tab>
+</Tabs>
+
+See [Database & migrations](/docs/guides/database-migrations) for the details, including
+`generateSchema` for standalone adapter setups.
+
+## 8. Start the app
+
+```bash
+pnpm dev
+```
+
+Visit `http://localhost:3000/admin`. With no users in the database you are redirected to
+the signup view — continue with
+[Create your first admin](/docs/getting-started/first-admin).

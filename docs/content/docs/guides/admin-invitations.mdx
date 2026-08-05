@@ -1,0 +1,127 @@
+---
+title: Admin invitations
+description: Invite new admins, and optionally require an invitation for every sign-up.
+---
+
+The `admin-invitations` collection is how new admins get created after the first one. Each
+record is a single-use token bound to a role.
+
+## The collection
+
+| Field | Notes |
+| --- | --- |
+| `role` | Which role the invitee receives; defaults to `users.defaultAdminRole` |
+| `token` | Random UUID; generated for you, regenerable from the admin UI |
+| `url` | The signup link, derived from `token` |
+| `expiresAt` | Required. Invitations generated through the endpoint expire after 7 days |
+
+Only users holding an admin role can read, create, update or delete these records.
+
+## Inviting from the admin panel
+
+An invite button is rendered in the description area of the users collection. It calls
+`POST /api/users/generate-invite-url`, which validates that you are an admin, creates the
+invitation record, and returns the link.
+
+If you configured `adminInvitations.sendInviteEmail`, you can also have the link emailed
+via `POST /api/users/send-invite`.
+
+```ts title="src/lib/auth/options.ts"
+export const payloadAuthOptions = {
+  adminInvitations: {
+    async sendInviteEmail({ payload, email, url }) {
+      try {
+        await payload.sendEmail({
+          to: email,
+          subject: 'You have been invited to the admin panel',
+          html: `<a href="${url}">Accept your invitation</a>`,
+        })
+        return { success: true }
+      } catch (error) {
+        return { success: false, message: 'Could not send invitation email' }
+      }
+    },
+  },
+} satisfies PayloadAuthOptions
+```
+
+The callback must return `{ success: true }` or `{ success: false, message }`. Without it
+configured, the send endpoint returns a 500 and logs that the function is missing —
+generating a link and sharing it manually still works.
+
+## Customising the invite URL
+
+By default the link is `<adminURL>/signup?token=<token>`, built from
+`payload.getAdminURL()`. Set `payload.config.serverURL` so that resolves to an absolute
+URL.
+
+To point invitations at your own signup page instead:
+
+```ts
+export const payloadAuthOptions = {
+  adminInvitations: {
+    generateInviteUrl: ({ payload, token }) =>
+      `https://app.example.com/join?token=${token}`,
+  },
+} satisfies PayloadAuthOptions
+```
+
+## Inviting programmatically
+
+```ts
+import { getPayload } from '@/lib/payload'
+
+const payload = await getPayload()
+const token = crypto.randomUUID()
+
+await payload.create({
+  collection: 'admin-invitations',
+  data: {
+    token,
+    role: 'admin',
+    expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
+  },
+})
+```
+
+`expiresAt` is required — there is no default, so you must supply it. `url` is a virtual
+field: it is stripped on write and regenerated on read from the token, so do not pass it.
+
+## Requiring an invitation for every sign-up
+
+By default invitations gate the admin panel only — your app's public sign-up is untouched.
+To require an invitation for *all* sign-ups:
+
+```ts
+betterAuthPlugin({
+  requireAdminInviteForSignUp: true,
+})
+```
+
+With this on:
+
+- Both email/password and social sign-ups need a valid invitation token.
+- Existing users still sign in normally.
+- Admins can still create users directly in the Payload UI or via the Local API.
+- Provider-level `disableImplicitSignUp` and `disableSignUp` are overridden: with a valid
+  invite the sign-up proceeds, without one it is blocked.
+- `disableImplicitSignUp` is set on every provider, so `authClient.signIn.social` calls
+  that would create a new account must pass `requestSignUp: true`.
+
+This is the setting for an internal tool where OAuth exists for staff convenience and
+public registration should be impossible.
+
+## Renaming or hiding the collection
+
+```ts
+betterAuthPlugin({
+  adminInvitations: {
+    slug: 'invites',
+    hidden: true,
+    collectionOverrides: ({ collection }) => ({
+      ...collection,
+      admin: { ...collection.admin, group: 'Administration' },
+    }),
+  },
+})
+```

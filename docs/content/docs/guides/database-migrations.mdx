@@ -1,0 +1,147 @@
+---
+title: Database and migrations
+description: Creating the auth tables, keeping migrations in sync, and generating a standalone schema.
+---
+
+The plugin adds collections, so it adds tables. Payload owns the schema — the adapter never
+touches your database directly, it goes through the Local API.
+
+## Any Payload adapter works
+
+Postgres, SQLite, MongoDB and their variants are all supported, because everything runs
+through Payload. The one thing the plugin needs to know is your ID type, which it reads
+from `payload.db.defaultIDType` and passes to the adapter so IDs convert correctly in both
+directions.
+
+## Development
+
+The quickest loop is Payload's push mode:
+
+```ts title="src/payload.config.ts"
+db: postgresAdapter({
+  push: true, // development only
+  pool: { connectionString: process.env.DATABASE_URI },
+})
+```
+
+Payload syncs the schema on boot. Convenient locally; never use it against production data.
+
+## Production
+
+Use migrations:
+
+```bash
+pnpm payload migrate:create   # generate from the current config
+pnpm payload migrate          # apply
+```
+
+A useful build script:
+
+```json title="package.json"
+{
+  "scripts": {
+    "build:prod": "payload migrate && next build"
+  }
+}
+```
+
+Re-run `migrate:create` whenever you change something that alters the schema:
+
+- enabling or disabling a Better Auth plugin that owns collections
+- renaming a collection with `slug`
+- adding fields through `collectionOverrides` or `user.additionalFields`
+- changing `users.roles`, which changes the `role` select options
+
+## Inspecting what will be created
+
+Set `debug.logTables` to have the plugin print the tables Better Auth requires on boot:
+
+```ts
+betterAuthPlugin({
+  debug: { logTables: true },
+})
+```
+
+Pair it with `enableDebugLogs` to trace every adapter call — each database operation is
+logged with its inputs and outputs under the `[payload-db-adapter]` prefix:
+
+```ts
+betterAuthPlugin({
+  debug: { enableDebugLogs: true, logTables: true },
+})
+```
+
+Both are noisy. Leave them off in production.
+
+## Generating collection files
+
+`generateSchema` writes Payload collection configs derived from your Better Auth options.
+You do **not** need this when using `betterAuthPlugin` — it builds the collections in
+memory. It is for standalone adapter setups, or for reading what the schema looks like.
+
+```ts title="src/bin/schema-gen.ts"
+import { generateSchema } from 'payload-auth/better-auth/adapter'
+import { betterAuthOptions } from '@/lib/auth/options'
+
+await generateSchema(betterAuthOptions, {
+  outputDir: './src/payload/schema',
+})
+```
+
+```bash
+pnpm tsx src/bin/schema-gen.ts
+```
+
+This writes `schema.ts` into the output directory, merging with anything already there.
+
+<Callout type="warn" title="Treat the output as a starting point">
+Generated collections are a convenience, not a finished product. Review the access control
+and field configuration before shipping them.
+</Callout>
+
+## Using the adapter without the plugin
+
+If you want Better Auth backed by Payload but not the generated collections and admin
+views, use the adapter on its own:
+
+```ts title="src/lib/auth.ts"
+import { betterAuth } from 'better-auth'
+import { payloadAdapter } from 'payload-auth/better-auth/adapter'
+import type { BasePayload } from 'payload'
+
+export function auth(payload: BasePayload) {
+  return betterAuth({
+    database: payloadAdapter({
+      payloadClient: payload,
+      adapterConfig: {
+        idType: payload.db.defaultIDType,
+        enableDebugLogs: false,
+      },
+    }),
+    // … your options
+  })
+}
+```
+
+You then own everything the plugin normally handles: declaring the collections, mapping
+`modelName` to your slugs, mapping field names such as `userId` → `user`, and access
+control. See [Adapter](/docs/reference/adapter).
+
+## Cleaning up expired records
+
+Sessions and verifications accumulate. Better Auth deletes expired sessions as it
+encounters them, but a periodic sweep keeps the tables small:
+
+```ts
+const payload = await getPayload()
+
+await payload.delete({
+  collection: 'sessions',
+  where: { expiresAt: { less_than: new Date().toISOString() } },
+})
+
+await payload.delete({
+  collection: 'verifications',
+  where: { expiresAt: { less_than: new Date().toISOString() } },
+})
+```

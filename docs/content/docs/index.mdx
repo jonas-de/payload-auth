@@ -1,0 +1,97 @@
+---
+title: Introduction
+description: payload-auth replaces Payload CMS's built-in authentication with Better Auth, so your admin panel and your app share a single auth system.
+icon: BookOpen
+---
+
+`payload-auth` is a [Payload CMS](https://payloadcms.com) plugin that swaps Payload's
+built-in authentication for [Better Auth](https://www.better-auth.com).
+
+Once installed, the Payload admin panel and your application authenticate against the
+same Better Auth session. There is no second user table and no bridging code: a user who
+signs in with Google on your marketing site is the same user Payload sees in the admin
+panel, with the same session cookie.
+
+## What you get
+
+<Cards>
+  <Card title="Generated collections" href="/docs/concepts/collections">
+    `users`, `sessions`, `accounts` and `verifications` are built from the Better Auth
+    schema, plus one collection per Better Auth plugin you enable.
+  </Card>
+  <Card title="Better Auth, unmodified" href="/docs/concepts/how-it-works">
+    The plugin installs a Payload database adapter. Every Better Auth endpoint, plugin
+    and client method behaves exactly as the Better Auth docs describe.
+  </Card>
+  <Card title="Replaced admin views" href="/docs/concepts/admin-panel">
+    Login, signup, forgot password, reset password and two-factor verification are
+    rendered by Better Auth-powered views inside the Payload admin panel.
+  </Card>
+  <Card title="Roles and access control" href="/docs/concepts/roles-and-access">
+    Define roles once. The plugin wires them into Payload access control and into the
+    Better Auth `admin` plugin.
+  </Card>
+</Cards>
+
+## A complete example
+
+```ts title="src/payload.config.ts"
+import { buildConfig } from 'payload'
+import { betterAuthPlugin } from 'payload-auth/better-auth'
+
+export default buildConfig({
+  admin: { user: 'users' },
+  // ... db, editor, secret
+  plugins: [
+    betterAuthPlugin({
+      users: {
+        roles: ['user', 'admin'],
+        adminRoles: ['admin'],
+      },
+      betterAuthOptions: {
+        emailAndPassword: { enabled: true },
+        socialProviders: {
+          google: {
+            clientId: process.env.GOOGLE_CLIENT_ID!,
+            clientSecret: process.env.GOOGLE_CLIENT_SECRET!,
+          },
+        },
+      },
+    }),
+  ],
+})
+```
+
+That single plugin call generates the auth collections, replaces the admin login views,
+and exposes a fully configured Better Auth instance at `payload.betterAuth`.
+
+## Requirements
+
+| Requirement | Version |
+| --- | --- |
+| `payload` | `>=3.79.1 <4` |
+| `@payloadcms/next`, `@payloadcms/ui` | `>=3.79.1 <4` |
+| `better-auth`, `@better-auth/core` | `>=1.5.0 <2` |
+| `next` | `>=15.4.8 <17` |
+| `react`, `react-dom` | `>=19.2.1 <20` |
+| `zod` | `^4.3.6` |
+
+Any Payload database adapter works — the plugin talks to Payload's Local API, not to your
+database directly.
+
+## Where to go next
+
+<Cards>
+  <Card title="Installation" href="/docs/getting-started/installation">
+    Install the package and wire it into your Payload config.
+  </Card>
+  <Card title="Create your first admin" href="/docs/getting-started/first-admin">
+    Bootstrap the first admin user and get into the panel.
+  </Card>
+  <Card title="Plugin options reference" href="/docs/reference/plugin-options">
+    Every option `betterAuthPlugin()` accepts.
+  </Card>
+  <Card title="Using with AI agents" href="/docs/ai-agents">
+    Point Cursor, Claude Code or Copilot at these docs.
+  </Card>
+</Cards>

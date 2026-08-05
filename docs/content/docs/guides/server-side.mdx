@@ -1,0 +1,220 @@
+---
+title: Server-side usage
+description: Reading sessions, calling the Better Auth API, and using the Payload Local API from server components and route handlers.
+---
+
+On the server, `payload.betterAuth` gives you the full Better Auth instance — no HTTP
+round trip.
+
+## The typed accessor
+
+Define this once and import it everywhere:
+
+```ts title="src/lib/payload.ts"
+import configPromise from '@payload-config'
+import { getPayloadAuth } from 'payload-auth/better-auth'
+import type { PayloadAuthConfig } from './auth/options'
+
+export const getPayload = async () =>
+  getPayloadAuth<PayloadAuthConfig>(configPromise)
+```
+
+`getPayloadAuth` wraps Payload's `getPayload` and throws a clear error if the plugin is not
+installed. Passing your options type as the generic is what makes `betterAuth.api`,
+`$Infer` and `$ERROR_CODES` reflect your actual plugin set.
+
+## Reading the session
+
+```tsx title="src/app/dashboard/page.tsx"
+import { headers } from 'next/headers'
+import { redirect } from 'next/navigation'
+import { getPayload } from '@/lib/payload'
+
+export default async function DashboardPage() {
+  const payload = await getPayload()
+  const session = await payload.betterAuth.api.getSession({
+    headers: await headers(),
+  })
+
+  if (!session) redirect('/sign-in')
+
+  return <h1>Hello {session.user.name}</h1>
+}
+```
+
+For the full Payload user document — including fields excluded from the session cookie —
+use `payload.auth()`, which runs the plugin's auth strategy:
+
+```ts
+const { user } = await payload.auth({ headers: await headers() })
+```
+
+| Call | Returns |
+| --- | --- |
+| `betterAuth.api.getSession()` | Better Auth `{ session, user }`, limited to cached fields |
+| `payload.auth()` | The complete Payload user document |
+
+## Calling any Better Auth endpoint
+
+Everything under `betterAuth.api` is available server-side and mirrors the HTTP API:
+
+```ts
+const payload = await getPayload()
+const requestHeaders = await headers()
+
+const accounts = await payload.betterAuth.api.listUserAccounts({ headers: requestHeaders })
+const sessions = await payload.betterAuth.api.listSessions({ headers: requestHeaders })
+
+await payload.betterAuth.api.signUpEmail({
+  body: { email: 'new@example.com', password: 'a-strong-password', name: 'New User' },
+})
+```
+
+Endpoints that mutate the session accept `asResponse: true` when you need the
+`Set-Cookie` headers:
+
+```ts
+export async function POST(request: Request) {
+  const payload = await getPayload()
+  return payload.betterAuth.api.signInEmail({
+    body: await request.json(),
+    asResponse: true,
+  })
+}
+```
+
+## Fetching in parallel
+
+Server components can start several reads at once and let React suspend on them:
+
+```ts
+export const getContextProps = () => ({
+  sessionPromise: getSession(),
+  userAccountsPromise: getUserAccounts(),
+  deviceSessionsPromise: getDeviceSessions(),
+})
+```
+
+## Types
+
+Derive everything from the accessor so types follow your config automatically:
+
+```ts title="src/lib/auth/types.ts"
+import type { getPayload } from '@/lib/payload'
+
+type PayloadWithAuth = Awaited<ReturnType<typeof getPayload>>
+
+export type Session = PayloadWithAuth['betterAuth']['$Infer']['Session']
+export type User = Session['user']
+export type ErrorCodes = PayloadWithAuth['betterAuth']['$ERROR_CODES']
+
+export type Account = Awaited<
+  ReturnType<PayloadWithAuth['betterAuth']['api']['listUserAccounts']>
+>[number]
+```
+
+`$ERROR_CODES` includes Better Auth's base codes plus the codes contributed by every plugin
+you enabled, which makes error handling exhaustive:
+
+```ts
+const { error } = await authClient.signIn.email({ email, password })
+
+if (error?.code === payload.betterAuth.$ERROR_CODES.INVALID_EMAIL_OR_PASSWORD) {
+  // …
+}
+```
+
+## Querying auth data with the Local API
+
+The generated collections are ordinary Payload collections:
+
+```ts
+const payload = await getPayload()
+
+const active = await payload.find({
+  collection: 'sessions',
+  where: { expiresAt: { greater_than: new Date().toISOString() } },
+  depth: 0,
+})
+
+const admins = await payload.find({
+  collection: 'users',
+  where: { role: { contains: 'admin' } },
+})
+```
+
+<Callout title="Use Payload field names">
+In `where` clauses, use the Payload names, not the Better Auth keys —
+`user` rather than `userId` on `sessions` and `accounts`. See
+[Collections](/docs/concepts/collections) for the mapping.
+</Callout>
+
+## Route handlers
+
+The catch-all route mounted during installation is all Better Auth needs:
+
+```ts title="src/app/api/auth/[...all]/route.ts"
+import { toNextJsHandler } from 'better-auth/next-js'
+import { getPayload } from '@/lib/payload'
+
+const payload = await getPayload()
+
+export const { POST, GET } = toNextJsHandler(payload.betterAuth)
+```
+
+For your own routes, gate on the session:
+
+```ts title="src/app/api/projects/route.ts"
+import { headers } from 'next/headers'
+import { getPayload } from '@/lib/payload'
+
+export async function GET() {
+  const payload = await getPayload()
+  const session = await payload.betterAuth.api.getSession({
+    headers: await headers(),
+  })
+
+  if (!session) return Response.json({ error: 'Unauthorized' }, { status: 401 })
+
+  const projects = await payload.find({
+    collection: 'projects',
+    where: { owner: { equals: session.user.id } },
+  })
+
+  return Response.json(projects)
+}
+```
+
+## Server actions
+
+```ts title="src/lib/actions/auth.ts"
+'use server'
+
+import { headers } from 'next/headers'
+import { revalidatePath } from 'next/cache'
+import { getPayload } from '@/lib/payload'
+
+export async function updateName(name: string) {
+  const payload = await getPayload()
+  const session = await payload.betterAuth.api.getSession({
+    headers: await headers(),
+  })
+
+  if (!session) throw new Error('Unauthorized')
+
+  await payload.update({
+    collection: 'users',
+    id: session.user.id,
+    data: { name },
+  })
+
+  revalidatePath('/settings')
+}
+```
+
+<Callout type="warn" title="`nextCookies()` and server actions">
+`nextCookies()` writes Better Auth's `Set-Cookie` headers through Next's `cookies()` API so
+they survive server actions. Keep it last in your `plugins` array. If the admin panel
+starts looping on `buildFormState` requests, see
+[Troubleshooting](/docs/troubleshooting).
+</Callout>

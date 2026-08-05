@@ -1,0 +1,120 @@
+---
+title: Better Auth plugin support
+description: Which Better Auth plugins are configured automatically, which pass through, and what each one adds.
+---
+
+Every Better Auth plugin can be used. They fall into two groups:
+
+- **Configured** — the plugin generates their collections and rewrites their `modelName`
+  and field mappings so they address your Payload slugs.
+- **Pass-through** — they need no storage or no mapping, so they are handed to Better Auth
+  untouched and behave exactly as their own docs describe.
+
+Nothing is filtered out. A plugin the integration does not specifically know about still
+reaches Better Auth.
+
+## Configured plugins
+
+| Plugin | Collections generated |
+| --- | --- |
+| `admin` | — (drives roles, ban, impersonation) |
+| `twoFactor` | `twoFactors` |
+| `passkey` | `passkeys` |
+| `apiKey` | `apiKeys` |
+| `organization` | `organizations`, `members`, `invitations`, `organizationRoles` |
+| `organization` (`teams.enabled`) | `teams`, `teamMembers` |
+| `sso` | `ssoProviders` |
+| `oidc` | `oauthApplications`, `oauthAccessTokens`, `oauthConsents` |
+| `deviceAuthorization` | `deviceCode` |
+
+These get a configurator that sets their model names and field mappings. The `admin`
+plugin additionally receives role-normalising middleware, so Payload's array-valued `role`
+field and Better Auth's string role stay consistent in both directions.
+
+## Plugins with generated collections
+
+Some plugins own storage without a dedicated configurator — their collections are still
+created from the schema:
+
+| Plugin | Collections |
+| --- | --- |
+| `stripe` | `subscriptions` |
+| `scim` | `scimProvider` |
+| `jwt` | `jwks` |
+| database rate limiting | `rateLimit` |
+
+## Pass-through plugins
+
+Recognised and passed straight to Better Auth:
+
+`oneTimeToken`, `oAuthProxy`, `haveIBeenPwned`, `captcha`, `bearer`, `genericOAuth`,
+`customSession`, `harmonyEmail`, `harmonyPhoneNumber`, `username`, `anonymous`,
+`phoneNumber`, `magicLink`, `emailOtp`, `oneTap`, `mcp`, `multiSession`, `openApi`,
+`nextCookies`, `expo`, `polar`, `autumn`, `dodopayments`, `dubAnalytics`,
+`lastLoginMethod`.
+
+Several of these do affect the admin UI even though they need no mapping:
+
+- **`username`** — the login and signup views accept a username. Which identifiers appear
+  follows `auth.loginWithUsername` on your users collection.
+- **`magicLink`, `emailOtp`, `phoneNumber`** — become selectable `admin.loginMethods`.
+- **`nextCookies`** — required for Better Auth cookies to survive Next.js server actions.
+
+## Notes per plugin
+
+### `admin`
+
+```ts
+import { admin } from 'better-auth/plugins'
+
+plugins: [admin()]
+```
+
+Your `users.adminRoles` and `users.defaultRole` are forwarded to it, so you configure roles
+once. Enabling it also reveals the Impersonate / Revoke Sessions / Ban buttons on the user
+edit view.
+
+### `nextCookies`
+
+Must be **last** in the array. See [Troubleshooting](/docs/troubleshooting) if the admin
+panel starts looping on `buildFormState` requests.
+
+```ts
+import { nextCookies } from 'better-auth/next-js'
+
+plugins: [admin(), organization(), nextCookies()]
+```
+
+### `openAPI`
+
+Serves an interactive reference of every auth endpoint your configuration exposes — useful
+for confirming what the generated setup actually offers.
+
+```ts
+import { openAPI } from 'better-auth/plugins'
+
+plugins: [openAPI()]
+```
+
+### Separately published plugins
+
+Some plugins ship as their own packages and are peer or optional dependencies:
+
+```package-install
+@better-auth/passkey @better-auth/api-key @better-auth/sso @better-auth/stripe @better-auth/scim
+```
+
+```ts
+import { passkey } from '@better-auth/passkey'
+import { apiKey } from '@better-auth/api-key'
+```
+
+## After changing plugins
+
+Enabling or disabling a plugin changes both the collection set and the admin components:
+
+```bash
+pnpm payload generate:importmap
+pnpm payload migrate:create
+pnpm payload migrate
+```

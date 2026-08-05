@@ -1,0 +1,105 @@
+---
+title: Client setup
+description: Create a typed Better Auth client for your frontend.
+---
+
+`payload-auth` does not ship its own client. You use the standard Better Auth client, which
+talks to the route handler you mounted at `/api/auth/[...all]`.
+
+## Create the client
+
+```ts title="src/lib/auth/client.ts"
+import { createAuthClient } from 'better-auth/react'
+import {
+  adminClient,
+  inferAdditionalFields,
+  twoFactorClient,
+} from 'better-auth/client/plugins'
+import { betterAuthOptions } from './options'
+
+export const authClient = createAuthClient({
+  baseURL: process.env.NEXT_PUBLIC_BETTER_AUTH_URL,
+  plugins: [
+    adminClient(),
+    twoFactorClient(),
+    inferAdditionalFields({
+      user: { role: { type: 'string' } },
+    }),
+  ],
+  $InferAuth: betterAuthOptions,
+})
+
+export const { signIn, signUp, signOut, useSession } = authClient
+```
+
+Two rules to keep in mind:
+
+- **Client plugins mirror server plugins.** Every Better Auth plugin that adds client
+  methods needs its matching `*Client()` entry here.
+- **Pass `$InferAuth`.** Handing your `betterAuthOptions` to the client gives you typed
+  sessions, users and plugin methods without importing server code into the browser.
+
+## Use it
+
+```tsx title="src/components/sign-in.tsx"
+'use client'
+
+import { authClient } from '@/lib/auth/client'
+
+export function SignIn() {
+  const { data: session, isPending } = authClient.useSession()
+
+  if (isPending) return null
+
+  if (session) {
+    return (
+      <button onClick={() => authClient.signOut()}>
+        Sign out {session.user.email}
+      </button>
+    )
+  }
+
+  return (
+    <button
+      onClick={() =>
+        authClient.signIn.social({ provider: 'google', callbackURL: '/dashboard' })
+      }
+    >
+      Continue with Google
+    </button>
+  )
+}
+```
+
+Everything else — `signIn.email`, `signUp.email`, `organization.*`, `passkey.*` — is
+plain Better Auth. See the
+[Better Auth client docs](https://www.better-auth.com/docs/concepts/client).
+
+## The `role` field
+
+`payload-auth` stores `role` as a Payload multi-select field, so on the session object it
+is a **string array**, not a string:
+
+```ts
+const { data: session } = authClient.useSession()
+
+session?.user.role // e.g. ['admin']
+```
+
+The exported `BetterAuthReturn['$Infer']['Session']` type reflects this. If you use the
+Better Auth `admin` plugin, its role checks still work — the plugin's middleware
+normalises between the two shapes.
+
+## Server-side access
+
+On the server, skip the HTTP client and call the auth instance directly:
+
+```ts
+import { headers } from 'next/headers'
+import { getPayload } from '@/lib/payload'
+
+const payload = await getPayload()
+const session = await payload.betterAuth.api.getSession({ headers: await headers() })
+```
+
+See [Server-side usage](/docs/guides/server-side) for the full picture.

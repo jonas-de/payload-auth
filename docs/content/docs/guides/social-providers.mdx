@@ -1,0 +1,114 @@
+---
+title: Social providers
+description: Add Google, GitHub, Apple and other OAuth providers to both your app and the Payload admin panel.
+---
+
+Social providers are configured entirely through `betterAuthOptions.socialProviders`. The
+plugin reads that object to decide which buttons the admin login and signup views render.
+
+## Configuration
+
+```ts title="src/lib/auth/options.ts"
+export const betterAuthOptions = {
+  socialProviders: {
+    google: {
+      clientId: process.env.GOOGLE_CLIENT_ID as string,
+      clientSecret: process.env.GOOGLE_CLIENT_SECRET as string,
+    },
+    github: {
+      clientId: process.env.GITHUB_CLIENT_ID as string,
+      clientSecret: process.env.GITHUB_CLIENT_SECRET as string,
+    },
+  },
+} satisfies BetterAuthOptions
+```
+
+Each provider's callback URL is `<baseURL>/api/auth/callback/<provider>` — for example
+`http://localhost:3000/api/auth/callback/google`. Register that exact URL with the
+provider.
+
+## Providers with an admin button
+
+The admin views ship branded buttons for: `apple`, `discord`, `facebook`, `github`,
+`google`, `linkedin`, `microsoft`, `spotify`, `tiktok`, `twitter`, `twitch`, `zoom`,
+`gitlab`, `roblox`, `vk`, `kick`, `reddit`.
+
+Any other Better Auth provider still works on your frontend — it just has no built-in
+button in the Payload admin views.
+
+## Controlling which buttons appear
+
+By default the admin views show a button for every configured provider, plus email/password
+and passkey when those are enabled. Override with `admin.loginMethods`:
+
+```ts
+betterAuthPlugin({
+  admin: { loginMethods: ['google', 'passkey'] },
+  betterAuthOptions: {
+    emailAndPassword: { enabled: true }, // still available to your frontend
+    socialProviders: {
+      google: { clientId: '…', clientSecret: '…' },
+      github: { clientId: '…', clientSecret: '…' },
+    },
+  },
+})
+```
+
+Here the panel offers Google and passkeys only, while your own app can still use GitHub and
+email/password.
+
+Re-run `payload generate:importmap` after changing this — the buttons are components
+resolved through the import map.
+
+## Signing in from your app
+
+```tsx
+await authClient.signIn.social({
+  provider: 'google',
+  callbackURL: '/dashboard',
+})
+```
+
+## Account linking
+
+To let an existing email/password user attach a Google account with the same address:
+
+```ts
+export const betterAuthOptions = {
+  account: {
+    accountLinking: {
+      enabled: true,
+      trustedProviders: ['google', 'email-password'],
+    },
+  },
+} satisfies BetterAuthOptions
+```
+
+Linked providers become rows in the `accounts` collection, visible in the admin panel.
+
+<Callout type="warn" title="Only trust providers that verify email">
+Automatic linking on a matching email address is an account-takeover risk with any
+provider that does not verify ownership of the address. Keep `trustedProviders` to
+providers you trust.
+</Callout>
+
+## Restricting sign-ups to invited users
+
+To use OAuth for staff access only, with no public registration:
+
+```ts
+betterAuthPlugin({
+  requireAdminInviteForSignUp: true,
+})
+```
+
+Existing users still sign in. New accounts require a valid admin invitation, across every
+provider and email/password alike. The plugin also sets `disableImplicitSignUp` on all
+providers, so `authClient.signIn.social` calls that would create an account must pass
+`requestSignUp: true`. See [Admin invitations](/docs/guides/admin-invitations).
+
+## Secrets
+
+Client secrets are stripped before plugin options are handed to the admin views, because
+Payload serialises server props into the admin HTML. Keep them in environment variables
+regardless — see [Admin panel integration](/docs/concepts/admin-panel).

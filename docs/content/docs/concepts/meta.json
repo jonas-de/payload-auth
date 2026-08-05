@@ -1,0 +1,11 @@
+{
+  "title": "Concepts",
+  "icon": "Layers",
+  "pages": [
+    "how-it-works",
+    "collections",
+    "admin-panel",
+    "roles-and-access",
+    "sessions"
+  ]
+}

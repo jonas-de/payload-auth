@@ -1,0 +1,175 @@
+---
+title: Exports
+description: Every entry point the payload-auth package exposes, and what lives behind it.
+---
+
+## Entry points
+
+| Import path | Contents |
+| --- | --- |
+| `payload-auth` | Everything below re-exported |
+| `payload-auth/better-auth` | Plugin, adapter and types — the usual import |
+| `payload-auth/better-auth/plugin` | Plugin only |
+| `payload-auth/better-auth/adapter` | Adapter only |
+| `payload-auth/better-auth/plugin/client` | Client components (`'use client'`) |
+| `payload-auth/better-auth/plugin/rsc` | React Server Components and views |
+| `payload-auth/shared/payload/fields` | Reusable Payload field components |
+
+## `payload-auth/better-auth`
+
+### `betterAuthPlugin(options)`
+
+```ts
+function betterAuthPlugin(pluginOptions: PayloadAuthOptions): (config: Config) => Config
+```
+
+The Payload plugin. See [Plugin options](/docs/reference/plugin-options).
+
+### `getPayloadAuth(config)`
+
+```ts
+function getPayloadAuth<O extends PayloadAuthOptions>(
+  config: Promise<SanitizedConfig> | SanitizedConfig,
+): Promise<BasePayload & { betterAuth: BetterAuthReturn<O> }>
+```
+
+Payload's `getPayload` with the Better Auth instance attached and typed. Throws if the
+plugin is not installed.
+
+```ts
+import configPromise from '@payload-config'
+import { getPayloadAuth } from 'payload-auth/better-auth'
+import type { PayloadAuthConfig } from './auth/options'
+
+const payload = await getPayloadAuth<PayloadAuthConfig>(configPromise)
+```
+
+### `generateVerifyEmailUrl(options)`
+
+```ts
+function generateVerifyEmailUrl(options: {
+  userEmail: string
+  secret: string
+  verifyRouteUrl: string
+  callbackURL?: string   // default '/'
+  expiresIn?: number     // seconds, default 3600
+}): Promise<string>
+```
+
+Signs a JWT containing the email address and builds a verification URL. Useful for seeding
+or for custom verification flows. The `callbackURL` is passed through a safe-redirect check
+before being appended.
+
+### `sanitizeBetterAuthOptions(...)`
+
+The internal function that rewrites `PayloadAuthOptions` into resolved
+`BetterAuthOptions`. Exported for inspection and testing; you rarely call it directly.
+
+## Types
+
+```ts
+import type {
+  BetterAuthOptions,
+  BetterAuthReturn,
+  PayloadAuthOptions,
+  LoginMethod,
+  SocialProvider,
+  SendAdminInviteEmailFn,
+  GenerateAdminInviteUrlFn,
+  PayloadRequestWithBetterAuth,
+  CollectionHookWithBetterAuth,
+  EndpointWithBetterAuth,
+} from 'payload-auth/better-auth'
+```
+
+| Type | Purpose |
+| --- | --- |
+| `PayloadAuthOptions` | The plugin's options object |
+| `BetterAuthOptions` | Better Auth's options with `database` removed |
+| `BetterAuthReturn<O>` | The instance on `payload.betterAuth`: `handler`, `api`, `options`, `$Infer`, `$ERROR_CODES`, `$context` |
+| `LoginMethod` | Union of valid `admin.loginMethods` values |
+| `SocialProvider` | Union of providers with a built-in admin button |
+| `PayloadRequestWithBetterAuth<O>` | `PayloadRequest` whose `payload` carries `betterAuth` |
+| `CollectionHookWithBetterAuth<O, T>` | Type a Payload hook so `req.payload.betterAuth` is available |
+| `EndpointWithBetterAuth<O>` | Type a Payload endpoint the same way |
+
+Typing a custom hook:
+
+```ts
+import type {
+  CollectionHookWithBetterAuth,
+  PayloadAuthOptions,
+} from 'payload-auth/better-auth'
+import type { CollectionAfterChangeHook } from 'payload'
+import type { PayloadAuthConfig } from '@/lib/auth/options'
+
+type AfterChange = CollectionHookWithBetterAuth<
+  PayloadAuthConfig,
+  CollectionAfterChangeHook
+>
+
+export const onUserChange: AfterChange = async ({ doc, req }) => {
+  const session = await req.payload.betterAuth.api.getSession({ headers: req.headers })
+  // …
+  return doc
+}
+```
+
+## `payload-auth/better-auth/plugin/client`
+
+Client components, all marked `'use client'`.
+
+| Export | Purpose |
+| --- | --- |
+| `AdminButtons` | Impersonate / revoke sessions / ban / unban, for the user edit view |
+| `AdminInviteButton` | Generates an admin invitation link |
+| `LogoutButton` | Ends the Better Auth session |
+| `CredentialsForm` | Email (or username) and password form |
+| `AlternativeMethods` | Social and passwordless buttons |
+| `LoginFormProvider` | Context provider for the login form pieces |
+| `useLoginForm` | Hook exposing the login form state |
+| `TwoFactorAuth` | 2FA enrolment: QR code, verification, backup codes |
+
+## `payload-auth/better-auth/plugin/rsc`
+
+Server components and admin views.
+
+| Export | Purpose |
+| --- | --- |
+| `AdminLogin` | The `/admin/login` view |
+| `AdminSignup` | The `/admin/signup` view |
+| `ForgotPassword` | The `/admin/forgot-password` view |
+| `ResetPassword` | The `/admin/reset-password` view |
+| `TwoFactorVerify` | The `/admin/two-factor-verify` view |
+| `Passkeys` | Passkey management list |
+| `RSCRedirect` | Redirect helper used by the login flow |
+
+## `payload-auth/shared/payload/fields`
+
+Field components you can attach to your own collections:
+
+| Export | Purpose |
+| --- | --- |
+| `FieldCopyButton` | Copy-to-clipboard button beside a field |
+| `GenerateUuidButton` | Fill a text field with a fresh UUID |
+
+```ts
+{
+  name: 'token',
+  type: 'text',
+  admin: {
+    components: {
+      afterInput: [{ path: 'payload-auth/shared/payload/fields#GenerateUuidButton' }],
+    },
+  },
+}
+```
+
+## `payload-auth/better-auth/adapter`
+
+| Export | Purpose |
+| --- | --- |
+| `payloadAdapter` | The Better Auth `DBAdapter` implementation |
+| `generateSchema` | Write Payload collection configs from Better Auth options |
+
+See [Adapter](/docs/reference/adapter).

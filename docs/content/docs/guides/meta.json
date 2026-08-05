@@ -1,0 +1,13 @@
+{
+  "title": "Guides",
+  "icon": "Compass",
+  "pages": [
+    "email-password",
+    "social-providers",
+    "passkeys-and-2fa",
+    "organizations",
+    "admin-invitations",
+    "server-side",
+    "database-migrations"
+  ]
+}

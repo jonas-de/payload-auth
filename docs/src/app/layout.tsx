@@ -1,47 +1,29 @@
-import "@/lib/styles/global.css";
-import { ThemeProvider } from "@/components/theme-provider";
-import { createMetadata, baseUrl } from "@/lib/metadata";
-import { RootProvider } from "fumadocs-ui/provider";
-import { GeistMono } from "geist/font/mono";
-import { GeistSans } from "geist/font/sans";
-import type { ReactNode } from "react";
-import { Toaster } from "@/components/ui/sonner";
-import { NavbarProvider } from "@/components/layout/nav/provider";
-import { Navbar } from "@/components/layout/nav";
-import { cn } from "@/lib/utils";
+import { RootProvider } from 'fumadocs-ui/provider/next';
+import './global.css';
+import type { Metadata } from 'next';
+import { Inter } from 'next/font/google';
+import { appDescription, appName } from '@/lib/shared';
 
-export const metadata = createMetadata({
-  title: {
-    template: "%s | Payload Auth",
-    default: "Payload Auth",
-  },
-  description:
-    "Payload Auth is a simple, secure, and flexible authentication library for Payload CMS.",
-  metadataBase: baseUrl,
+const inter = Inter({
+  subsets: ['latin'],
 });
 
-export default function Layout({ children }: { children: ReactNode }) {
+export const metadata: Metadata = {
+  metadataBase: new URL(
+    process.env.NEXT_PUBLIC_SITE_URL ?? 'https://payload-auth.dev',
+  ),
+  title: {
+    default: `${appName} — Better Auth for Payload CMS`,
+    template: `%s | ${appName}`,
+  },
+  description: appDescription,
+};
+
+export default function Layout({ children }: LayoutProps<'/'>) {
   return (
-    <html
-      lang="en"
-      className={cn(GeistSans.variable, GeistMono.variable)}
-      suppressHydrationWarning
-    >
-      <body className="bg-background font-sans relative">
-        <RootProvider
-          theme={{
-            attribute: "class",
-            enableSystem: true,
-            defaultTheme: "dark",
-            disableTransitionOnChange: true,
-          }}
-        >
-          <NavbarProvider>
-            <Navbar />
-            {children}
-            <Toaster />
-          </NavbarProvider>
-        </RootProvider>
+    <html lang="en" className={inter.className} suppressHydrationWarning>
+      <body className="flex flex-col min-h-screen">
+        <RootProvider>{children}</RootProvider>
       </body>
     </html>
   );

@@ -1,129 +1,90 @@
-# Payload CMS Database Adapter for BetterAuth
+# Payload database adapter for Better Auth
 
-Introducing a database adapter designed for [Payload CMS](https://www.payloadcms.com/) that enables seamless integration with [BetterAuth](https://www.better-auth.com/).
+Implements Better Auth's `DBAdapter` interface on top of Payload's Local API.
 
-> [!CAUTION]
-> This adapter is currently in beta.
-> If you encounter any issues, please report them in the [Issues](https://github.com/forrestdevs/payload-better-auth/issues) section.
+> **You usually do not construct this yourself.** `betterAuthPlugin` installs the adapter,
+> generates the collections, and wires every `modelName` and field mapping for you. Reach
+> for the adapter directly only when you want Better Auth backed by Payload storage
+> *without* the plugin's generated collections and admin views.
 
-## Important Usage Notes
-
-> [!NOTE]
-> If you are using the `@payload-auth/better-auth-plugin`, you do not need to worry about these steps. The plugin handles the adapter setup internally. However, if you are implementing the Payload authentication integration manually, follow these instructions.
-
-## Installation
-
-```bash
-npm install @payload-auth/better-auth-db-adapter
-```
+Full reference: <https://payload-auth.dev/docs/reference/adapter>
 
 ## Usage
 
-### 1. Initiate the Payload Database Adapter
-
-> [!NOTE]
-> Because the `payloadAdapter` is most commonly used with the `@payload-auth/better-auth-plugin`, we need to wrap the Better Auth definition in a function that takes `payload` as a prop and returns the `auth` instance.
-
-Head over to your Better Auth server instance, and under `database`, add the `payloadAdapter` function.
-
 ```ts
+import { betterAuth } from 'better-auth'
+import { payloadAdapter } from 'payload-auth/better-auth/adapter'
 import type { BasePayload } from 'payload'
-import { betterAuth as betterAuthBase } from 'better-auth'
-import { payloadAdapter } from '@payload-auth/better-auth-db-adapter'
 
-export function betterAuth(payload: BasePayload) {
-  return betterAuthBase({
-    database: payloadAdapter(payload),
-    plugins: []
-    //... other options
+export function auth(payload: BasePayload) {
+  return betterAuth({
+    database: payloadAdapter({
+      payloadClient: payload,
+      adapterConfig: {
+        idType: payload.db.defaultIDType,
+        enableDebugLogs: false,
+      },
+    }),
+    // ... your options
   })
 }
 ```
 
-### 2. Enable Debug Logging
+Better Auth is constructed from a Payload instance, which is why this is a function rather
+than a module-level constant.
 
-You can enable debug logging to help troubleshoot database operations by passing the `enable_debug_logs` option to the adapter. This will log all database calls with their inputs and outputs to the console.
+### Options
 
-```ts
-import type { BasePayload } from 'payload'
-import { betterAuth as betterAuthBase } from 'better-auth'
-import { payloadAdapter } from '@payload-auth/better-auth-db-adapter'
+| Option | Type | Description |
+| --- | --- | --- |
+| `payloadClient` | `BasePayload \| Promise<BasePayload> \| (() => Promise<BasePayload>)` | The Payload instance. A promise or thunk is allowed so it can resolve lazily; the result is cached. |
+| `adapterConfig.idType` | `'number' \| 'text'` | How your database represents IDs. Use `payload.db.defaultIDType`. |
+| `adapterConfig.enableDebugLogs` | `boolean` | Log every database call with inputs and outputs under the `[payload-db-adapter]` prefix. Defaults to `false`. |
 
-export function betterAuth(payload: BasePayload) {
-  return betterAuthBase({
-    database: payloadAdapter(payload, { enable_debug_logs: true }),
-    plugins: []
-    //... other options
-  })
-}
-```
+## Mapping is your responsibility
 
-### Important considerations
-
-If you decide to use `@payload-auth/better-auth-db-adapter` independently and implement the Payload CMS integration manually, there are several important considerations:
-
-#### 1. Field Mapping Requirements
-
-You must map BetterAuth's field names to Payload's collection field names:
+Standalone, nothing rewrites model names or field names. Payload slugs are usually plural
+while Better Auth models are singular, and foreign keys become relationships:
 
 ```ts
-// Example mapping configuration
-const betterAuthOptions = {
-  session: {
-    modelName: 'sessions',
-    fields: {
-      userId: 'user' // Maps BetterAuth's 'userId' to Payload's 'user' relationship field
-    }
-  }
-  // Other collections...
-}
-```
-
-#### 2. Collection Name Conventions
-
-Payload typically uses plural collection slugs (e.g., 'users', 'sessions'), while BetterAuth may expect different naming conventions. Make sure to specify the correct modelName:
-
-```ts
-const betterAuthOptions = {
-  user: {
-    modelName: 'users' // Maps to Payload's 'users' collection
-  },
-  session: {
-    modelName: 'sessions' // Maps to Payload's 'sessions' collection
-  }
-}
-```
-
-#### 3. Schema Generation Utility
-
-The adapter provides a schema generation utility that can automatically create Payload collection configurations based on your BetterAuth options:
-
-```ts
-import { generateSchema } from '@payload-auth/better-auth-db-adapter'
-import { betterAuthOptions } from './your-better-auth-config'
-
-// Generate collection configs
-const collections = generateSchema(betterAuthOptions, {
-  output_dir: './src/collections/generated'
-})
-
-// Use in your Payload config
-export default buildConfig({
-  collections: [
-    ...collections
-    // Your other collections
-  ]
-  // other Payload config options
+betterAuth({
+  database: payloadAdapter({ payloadClient, adapterConfig: { idType: 'number' } }),
+  user: { modelName: 'users' },
+  session: { modelName: 'sessions', fields: { userId: 'user' } },
+  account: { modelName: 'accounts', fields: { userId: 'user' } },
+  verification: { modelName: 'verifications' },
 })
 ```
 
-> [!IMPORTANT]
-> The schema generation function is provided as a convenience to help you get started quickly. It is not yet perfect and should be considered a starting point. Always review and adjust the generated collection configurations to ensure they meet your specific requirements and security needs before using them in production.
+A model that resolves to a slug Payload does not know throws
+`BetterAuthError: Collection <model> does not exist`.
 
-## Contributing
+## What it translates
 
-Contributions are welcome! Please feel free to submit a Pull Request.
+- **IDs** — Better Auth expects strings; Payload may use numbers. Converted in both
+  directions using `idType`.
+- **Field names** — configured `fields` mappings are applied on input and reversed on
+  output.
+- **Operators** — `eq` → `equals`, `ne` → `not_equals`, `gt` → `greater_than`,
+  `starts_with` / `ends_with` → `like`, and so on.
+- **Dates** — ISO strings from Payload become `Date` objects.
+- **Depth** — every query runs at `depth: 0`, so relationships come back as raw IDs.
 
-## License
+A `where` clause that is just `id equals X` is routed to `payload.findByID()` rather than
+`payload.find()`.
 
-This project is licensed under the MIT License - see the LICENSE file for details.
+## Schema generation
+
+`generateSchema` writes Payload collection configs derived from your Better Auth options:
+
+```ts
+import { generateSchema } from 'payload-auth/better-auth/adapter'
+import { betterAuthOptions } from './auth/options'
+
+await generateSchema(betterAuthOptions, { outputDir: './src/payload/schema' })
+```
+
+It writes `schema.ts` into the output directory, merging with anything already there.
+
+> Treat the output as a starting point. Review the access control and field configuration
+> before shipping it.
