@@ -1,9 +1,11 @@
 node_modules
 dist
 .DS_Store
-.env
 .next
 .vscode
 .turbo
 .backups
 package-lock.json
+.vercel
+.env
+.env*.local
