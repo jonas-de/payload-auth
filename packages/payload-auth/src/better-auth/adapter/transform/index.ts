@@ -1,4 +1,4 @@
-import type { BetterAuthOptions, Where } from "better-auth";
+import { BetterAuthError, type BetterAuthOptions, type Where } from "better-auth";
 import type { DBFieldAttribute } from "better-auth/db";
 import { getAuthTables } from "better-auth/db";
 import {
@@ -19,6 +19,40 @@ export const createTransform = (
   enableDebugLogs: boolean
 ) => {
   const schema = getAuthTables(options);
+
+  // BA's core `getAuthTables` (@better-auth/core/db/get-tables.mjs) hardcodes
+  // the base session.userId and account.userId fields' `references.model` to
+  // the literal BA model key "user" — it does NOT resolve this through
+  // `options.user.modelName` the way this codebase's plugin field renames do
+  // (unlike plugin-declared relationship fields such as member.userId or
+  // session.impersonatedBy, which sanitizeBetterAuthOptions/configureXPlugin
+  // already rewrite to the resolved Payload collection slug before
+  // betterAuth() processes them).
+  //
+  // getForwardRelationFieldNames() below disambiguates forward-join targets
+  // by matching `field.references.model` against the Payload collection slug
+  // (e.g. "users"), not the BA model key ("user"). Left unpatched, session's
+  // literal-"user" userId field never matches "users", so a `join: { user:
+  // true }` request (used throughout BA — internal-adapter's findSession,
+  // organization's listOrganizations, admin's impersonation checks, etc.)
+  // either finds no forward-relationship field at all, or — worse, when the
+  // admin plugin is enabled — incorrectly matches session.impersonatedBy
+  // instead (whose references.model IS correctly rewritten by
+  // configureAdminPlugin), silently populating the wrong field and leaving
+  // session.user as a raw unpopulated foreign-key id.
+  //
+  // Patch it here, once, using the already-resolved user collection slug
+  // (schema.user.modelName is set via sanitizeBetterAuthOptions before this
+  // runs) so both directions resolve to the correct field.
+  const resolvedUserCollectionSlug = schema?.user?.modelName;
+  if (resolvedUserCollectionSlug) {
+    if (schema.session?.fields?.userId?.references) {
+      schema.session.fields.userId.references.model = resolvedUserCollectionSlug;
+    }
+    if (schema.account?.fields?.userId?.references) {
+      schema.account.fields.userId.references.model = resolvedUserCollectionSlug;
+    }
+  }
 
   function debugLog(message: any[]) {
     if (enableDebugLogs) {
@@ -916,7 +950,12 @@ export const createTransform = (
       const id = value.id;
       if (idType === "number" && typeof id === "string") {
         const numId = Number(id);
-        return !isNaN(numId) ? numId : id;
+        if (isNaN(numId)) {
+          throw new BetterAuthError(
+            `[payload-db-adapter] Cannot convert id "${id}" on relationship/ID field "${lookupKey}" (model: "${model}") to a numeric ID (idType: "number"). The referenced document's id must be a numeric string or number.`
+          );
+        }
+        return numId;
       }
       if (idType === "text" && typeof id === "number") {
         return String(id);
@@ -924,13 +963,27 @@ export const createTransform = (
       return id;
     }
 
-    // Case 2: Value is a standalone ID that needs type conversion
-    if (
-      idType === "number" &&
-      typeof value === "string" &&
-      !isNaN(Number(value))
-    ) {
-      return Number(value);
+    // Case 2: Value is a standalone ID that needs type conversion.
+    // A value that genuinely cannot be coerced to the configured idType
+    // (including a missing/undefined value where a real ID was expected)
+    // must fail loudly here rather than silently passing through — letting
+    // it reach the database driver produces an opaque `params: NaN`
+    // Postgres error with no indication of which field or document caused it.
+    if (idType === "number") {
+      if (typeof value === "string") {
+        const numValue = Number(value);
+        if (isNaN(numValue)) {
+          throw new BetterAuthError(
+            `[payload-db-adapter] Cannot convert where-clause value "${value}" for relationship/ID field "${lookupKey}" (model: "${model}") to a numeric ID (idType: "number").`
+          );
+        }
+        return numValue;
+      }
+      if (value === undefined) {
+        throw new BetterAuthError(
+          `[payload-db-adapter] Missing value for relationship/ID field "${lookupKey}" (model: "${model}") in where clause — expected a numeric ID but received undefined. This usually means an upstream document reference (e.g. a forward-joined relationship such as session.user) was not populated correctly.`
+        );
+      }
     }
     if (idType === "text" && typeof value === "number") {
       return String(value);
