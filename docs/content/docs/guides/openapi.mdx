@@ -1,0 +1,132 @@
+---
+title: OpenAPI reference
+description: Generate an OpenAPI schema and a browsable reference for your auth endpoints.
+---
+
+The Better Auth `openAPI` plugin serves a Scalar-powered API reference for your auth
+endpoints and exposes the generated OpenAPI schema as JSON.
+
+It is particularly useful with `payload-auth`, because the endpoints your app exposes are
+not something you wrote by hand — they are whatever your enabled Better Auth plugins
+contribute. The reference is the quickest way to see what your configuration actually
+produced.
+
+<Callout type="warn">
+The reference describes your entire authentication surface. Review who can reach it before
+enabling it in production — see [Production access](#production-access).
+</Callout>
+
+## Enable it
+
+Add the plugin to `betterAuthOptions.plugins`:
+
+```ts title="src/lib/auth/options.ts"
+import type { BetterAuthOptions } from 'payload-auth/better-auth'
+import { openAPI } from 'better-auth/plugins'
+import { nextCookies } from 'better-auth/next-js'
+
+export const betterAuthOptions = {
+  plugins: [
+    openAPI(),
+    nextCookies(), // keep last
+  ],
+} satisfies BetterAuthOptions
+```
+
+`openAPI` needs no storage, so it adds no Payload collections and requires no migration.
+
+## Use it
+
+The reference and schema are served by the catch-all route you mounted at
+`app/api/auth/[...all]`, so no extra wiring is needed:
+
+| Path | Contents |
+| --- | --- |
+| `/api/auth/reference` | Browsable Scalar reference |
+| `/api/auth/open-api/generate-schema` | The OpenAPI document as JSON |
+
+Endpoints are grouped by the plugin that contributed them. Core auth endpoints appear under
+`Default`, and generated model schemas under `Models` — which, with `payload-auth`, reflect
+the collections the plugin generated for you.
+
+### Generating the schema on the server
+
+```ts title="src/lib/openapi.ts"
+import { getPayload } from '@/lib/payload'
+
+export async function getAuthOpenAPISchema() {
+  const payload = await getPayload()
+  return payload.betterAuth.api.generateOpenAPISchema()
+}
+```
+
+Useful for writing the document to disk at build time, or for feeding a client generator.
+
+### Combining with your own API docs
+
+If you already serve a Scalar reference for your application API, add the auth schema as a
+second source rather than running two reference pages:
+
+```ts title="docs.ts"
+Scalar({
+  pageTitle: 'API Documentation',
+  sources: [
+    { url: '/api/open-api', title: 'API' },
+    { url: '/api/auth/open-api/generate-schema', title: 'Auth' },
+  ],
+})
+```
+
+## Options
+
+<TypeTable
+  type={{
+    path: {
+      type: 'string',
+      default: '"/reference"',
+      description: 'Where the reference UI is served. Appended to the auth base path, so the default resolves to /api/auth/reference.',
+    },
+    disableDefaultReference: {
+      type: 'boolean',
+      default: 'false',
+      description: 'Skip the built-in Scalar reference page and serve only the schema endpoint.',
+    },
+    theme: {
+      type: 'ScalarTheme',
+      default: '"default"',
+      description: 'Reference theme: alternate, default, moon, purple, solarized, bluePlanet, saturn, kepler, mars, deepSpace, laserwave or none.',
+    },
+    nonce: {
+      type: 'string',
+      description: 'CSP nonce attached to the reference page\'s inline scripts.',
+    },
+  }}
+/>
+
+```ts
+openAPI({
+  path: '/auth-reference', // → /api/auth/auth-reference
+  theme: 'moon',
+})
+```
+
+## Production access
+
+The reference is not access-controlled. A common pattern is to enable it outside
+production only:
+
+```ts title="src/lib/auth/options.ts"
+export const betterAuthOptions = {
+  plugins: [
+    ...(process.env.NODE_ENV === 'production' ? [] : [openAPI()]),
+    nextCookies(),
+  ],
+} satisfies BetterAuthOptions
+```
+
+Spreading a conditional array keeps the `plugins` entries well-typed, which
+`[cond ? openAPI() : undefined].filter(Boolean)` does not.
+
+If you want it available in production, put it behind your own routing, authentication or
+deployment rules, or set `disableDefaultReference: true` and expose only the schema
+endpoint to the tooling that needs it.

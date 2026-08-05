@@ -8,6 +8,7 @@
     "organizations",
     "admin-invitations",
     "server-side",
-    "database-migrations"
+    "database-migrations",
+    "openapi"
   ]
 }
