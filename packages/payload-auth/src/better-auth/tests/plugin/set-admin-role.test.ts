@@ -17,6 +17,10 @@ import { getPayload } from "../dev";
  *
  * Requires a running Postgres database.
  */
+function futureExpiry(): string {
+  return new Date(Date.now() + 60 * 60 * 1000).toISOString();
+}
+
 describe("Admin Invite Role Assignment (P0-3 / P0-4 Regression)", async () => {
   const payload = await getPayload();
 
@@ -57,7 +61,8 @@ describe("Admin Invite Role Assignment (P0-3 / P0-4 Regression)", async () => {
       data: {
         token,
         role: "admin",
-        url: `http://localhost:3000/admin/signup?token=${token}`
+        url: `http://localhost:3000/admin/signup?token=${token}`,
+        expiresAt: futureExpiry()
       }
     });
 
@@ -129,7 +134,8 @@ describe("Admin Invite Role Assignment (P0-3 / P0-4 Regression)", async () => {
       data: {
         token,
         role: "admin",
-        url: `http://localhost:3000/admin/signup?token=${token}`
+        url: `http://localhost:3000/admin/signup?token=${token}`,
+        expiresAt: futureExpiry()
       }
     });
 
@@ -163,7 +169,8 @@ describe("Admin Invite Role Assignment (P0-3 / P0-4 Regression)", async () => {
       data: {
         token,
         role: "admin",
-        url: `http://localhost:3000/admin/signup?token=${token}`
+        url: `http://localhost:3000/admin/signup?token=${token}`,
+        expiresAt: futureExpiry()
       }
     });
 

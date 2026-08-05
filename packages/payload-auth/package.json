@@ -22,39 +22,42 @@
     "payload-plugin"
   ],
   "main": "./dist/index.js",
-  "module": "./dist/index.mjs",
   "types": "./dist/index.d.ts",
   "type": "module",
   "exports": {
-    ".": "./dist/index.js",
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    },
     "./better-auth": {
-      "import": "./dist/better-auth/index.js",
       "types": "./dist/better-auth/index.d.ts",
+      "import": "./dist/better-auth/index.js",
       "default": "./dist/better-auth/index.js"
     },
     "./better-auth/adapter": {
-      "import": "./dist/better-auth/adapter/index.js",
       "types": "./dist/better-auth/adapter/index.d.ts",
+      "import": "./dist/better-auth/adapter/index.js",
       "default": "./dist/better-auth/adapter/index.js"
     },
     "./better-auth/plugin": {
-      "import": "./dist/better-auth/plugin/index.js",
       "types": "./dist/better-auth/plugin/index.d.ts",
+      "import": "./dist/better-auth/plugin/index.js",
       "default": "./dist/better-auth/plugin/index.js"
     },
     "./better-auth/plugin/client": {
-      "import": "./dist/better-auth/plugin/payload/exports/client.js",
       "types": "./dist/better-auth/plugin/payload/exports/client.d.ts",
+      "import": "./dist/better-auth/plugin/payload/exports/client.js",
       "default": "./dist/better-auth/plugin/payload/exports/client.js"
     },
     "./better-auth/plugin/rsc": {
-      "import": "./dist/better-auth/plugin/payload/exports/rsc.js",
       "types": "./dist/better-auth/plugin/payload/exports/rsc.d.ts",
+      "import": "./dist/better-auth/plugin/payload/exports/rsc.js",
       "default": "./dist/better-auth/plugin/payload/exports/rsc.js"
     },
     "./shared/payload/fields": {
-      "import": "./dist/shared/payload/fields/index.js",
       "types": "./dist/shared/payload/fields/index.d.ts",
+      "import": "./dist/shared/payload/fields/index.js",
       "default": "./dist/shared/payload/fields/index.js"
     }
   },
@@ -69,59 +72,58 @@
     "dev:watch": "swc ./src -d ./dist --config-file .swcrc --strip-leading-paths --watch",
     "copyfiles": "copyfiles -u 1 --exclude \"src/better-auth/adapter/tests/**/*\" --exclude \"src/better-auth/tests/**/*\" --exclude \"src/better-auth/plugin/tests/**/*\" \"src/**/*.{html,css,scss,ttf,woff,woff2,eot,svg,jpg,png,json}\" dist",
     "build:swc": "swc ./src -d ./dist --config-file .swcrc --strip-leading-paths",
-    "build:types": "pnpm generate:better-auth-types && tsc --project tsconfig.json",
+    "build:types": "pnpm generate:better-auth-types && tsc --project tsconfig.json && tsc-alias -p tsconfig.json",
     "test": "vitest",
     "test:run": "vitest run",
     "test:payload": "cross-env PAYLOAD_CONFIG_PATH=src/better-auth/tests/dev/index.ts payload",
     "generate:better-auth-types": "rm -rf src/better-auth/generated-types.ts && tsx src/better-auth/scripts/generate-types.ts"
   },
   "peerDependencies": {
-    "@better-auth/passkey": ">=1.4.0 <2",
-    "@payloadcms/next": ">=3.69.0 <4",
-    "@payloadcms/ui": ">=3.69.0 <4",
-    "better-auth": ">=1.4.0 <2",
+    "@better-auth/core": ">=1.5.0 <2",
+    "@better-auth/passkey": ">=1.5.0 <2",
+    "@payloadcms/next": ">=3.79.1 <4",
+    "@payloadcms/ui": ">=3.79.1 <4",
+    "better-auth": ">=1.5.0 <2",
     "next": ">=15.4.8 <17",
-    "payload": ">=3.69.0 <4",
+    "payload": ">=3.79.1 <4",
     "react": ">=19.2.1 <20",
-    "react-dom": ">=19.2.1 <20"
+    "react-dom": ">=19.2.1 <20",
+    "zod": "^4.3.6"
   },
   "devDependencies": {
-    "@better-auth/api-key": "1.5.3",
-    "@better-auth/passkey": "1.5.3",
-    "@better-auth/core": "1.5.3",
-    "@better-auth/sso": "1.5.3",
-    "@better-auth/stripe": "1.5.3",
-    "@better-auth/scim": "1.5.3",
-    "@payloadcms/db-postgres": "3.79.0",
-    "@payloadcms/next": "3.79.0",
-    "@payloadcms/ui": "3.79.0",
-    "@polar-sh/better-auth": "1.8.2",
-    "@polar-sh/sdk": "^0.46.1",
-    "better-auth": "1.5.3",
+    "@better-auth/api-key": "1.6.25",
+    "@better-auth/passkey": "1.6.25",
+    "@better-auth/core": "1.6.25",
+    "@better-auth/sso": "1.6.25",
+    "@better-auth/stripe": "1.6.25",
+    "@better-auth/scim": "1.6.25",
+    "@payloadcms/db-postgres": "3.79.1",
+    "@payloadcms/next": "3.79.1",
+    "@payloadcms/ui": "3.79.1",
+    "better-auth": "1.6.25",
     "@swc/cli": "0.7.9",
     "@swc/core": "1.15.8",
     "@types/node": "25.0.3",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "better-auth-harmony": "^1.2.5",
     "copyfiles": "^2.4.1",
     "cross-env": "^7.0.3",
     "dotenv": "^16.5.0",
-    "payload": "3.79.0",
+    "payload": "3.79.1",
+    "tsc-alias": "^1.8.10",
     "tsx": "^4.19.4",
     "typescript": "5.9.3",
-    "vitest": "4.0.18"
+    "vitest": "4.0.18",
+    "zod": "^4.3.6"
   },
   "dependencies": {
-    "@better-auth/utils": "0.3.1",
+    "@better-auth/utils": "0.4.2",
     "@tanstack/react-form": "1.27.7",
-    "class-variance-authority": "0.7.1",
     "clsx": "2.1.1",
+    "http-status": "^2.1.0",
     "jose": "6.1.3",
     "lucide-react": "0.562.0",
-    "qrcode.react": "4.2.0",
-    "sonner": "2.0.7",
-    "svix": "1.84.1",
-    "tailwind-merge": "3.4.0",
-    "uncrypto": "0.1.3"
+    "qrcode.react": "4.2.0"
   }
 }

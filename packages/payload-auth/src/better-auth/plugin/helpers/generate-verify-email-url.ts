@@ -1,4 +1,5 @@
 import { SignJWT } from "jose";
+import { getSafeRedirect } from "@/better-auth/plugin/payload/utils/get-safe-redirect";
 
 /**
  * Generates a verification URL for email verification
@@ -59,7 +60,8 @@ export const generateVerifyEmailUrl = async ({
     .sign(new TextEncoder().encode(secret));
 
   // Build the verification URL
-  const verifyUrl = `${verifyRouteUrl}?token=${jwt}${callbackURL ? `&callbackURL=${encodeURIComponent(callbackURL)}` : ""}`;
+  const safeCallbackURL = callbackURL ? getSafeRedirect(callbackURL, "") : "";
+  const verifyUrl = `${verifyRouteUrl}?token=${jwt}${safeCallbackURL ? `&callbackURL=${encodeURIComponent(safeCallbackURL)}` : ""}`;
 
   return verifyUrl;
 };

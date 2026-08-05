@@ -9,6 +9,7 @@ import { z } from "zod";
 import { useAppForm } from "@/shared/form";
 import { Form, FormInputWrap } from "@/shared/form/ui";
 import { FormHeader } from "@/shared/form/ui/header";
+import { otpField } from "@/shared/form/validation";
 
 interface TwoFactorVerifyFormProps {
   redirect: string;
@@ -31,10 +32,7 @@ export function TwoFactorVerifyForm({
   );
 
   const otpSchema = z.object({
-    code: z
-      .string()
-      .length(twoFactorDigits, `Code must be ${twoFactorDigits} digits`)
-      .refine((val) => /^\d{6}$/.test(val), "Code must be numeric")
+    code: otpField({ digits: twoFactorDigits })
   });
 
   const form = useAppForm({
@@ -70,7 +68,7 @@ export function TwoFactorVerifyForm({
             <field.TextField
               type="text"
               className="text otp"
-              label={"6-digit Code"}
+              label={`${twoFactorDigits}-digit Code`}
               required
               autoComplete="one-time-password"
             />

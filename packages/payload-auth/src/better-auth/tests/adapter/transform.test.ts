@@ -41,6 +41,7 @@ function defaultMockPayload(): BasePayload {
         { name: "email", type: "text" },
         { name: "emailVerified", type: "checkbox" },
         { name: "image", type: "text" },
+        { name: "role", type: "select", hasMany: true, options: ["user", "admin"] },
         { name: "createdAt", type: "date" },
         { name: "updatedAt", type: "date" }
       ]),
@@ -192,6 +193,45 @@ describe("Transform Layer", () => {
       });
 
       expect(result.role).toEqual(["admin"]);
+    });
+
+    // Plan 009 / ADAPTER-10: role casing must be preserved (no .toLowerCase())
+    // so configured camelCase roles like "orgOwner" survive select validation.
+    it("preserves casing when converting a comma-string role to an array (ADAPTER-10)", () => {
+      const transform = createTransform(minimalOptions, false);
+      const payload = defaultMockPayload();
+
+      const result = transform.transformInput({
+        data: { role: "orgOwner,editor" },
+        model: "user" as any,
+        idType: "text",
+        payload
+      });
+
+      expect(result.role).toEqual(["orgOwner", "editor"]);
+    });
+
+    // Plan 009 / #112: role conversion must be scoped to hasMany select
+    // fields only. member/invitation store role as plain text holding BA's
+    // comma-string and must not be force-converted into an array.
+    it("does not convert role to an array for a plain text field (#112)", () => {
+      const transform = createTransform(minimalOptions, false);
+      const payload = defaultMockPayload();
+      // Give the "sessions" mock collection a text `role` field to simulate
+      // member/invitation, which store role as plain text (not hasMany select).
+      (payload.collections as any).sessions.config.fields.push({
+        name: "role",
+        type: "text"
+      });
+
+      const result = transform.transformInput({
+        data: { role: "owner" },
+        model: "session" as any,
+        idType: "text",
+        payload
+      });
+
+      expect(result.role).toBe("owner");
     });
   });
 
@@ -527,6 +567,133 @@ describe("Transform Layer", () => {
 
       expect(transform.getFieldName("user" as any, "email")).toBe("email");
       expect(transform.getFieldName("user" as any, "name")).toBe("name");
+    });
+  });
+
+  describe("transformOutput — relationship ID collision (normalizeDocumentIds)", () => {
+    // Options that add a plugin-style "teamMember" model with an UNRENAMED
+    // relationship field (userId), mirroring the real organization plugin's
+    // teamMember.userId / organizationRole.organizationId, which have no
+    // entry in baModelFieldKeysToFieldNames. Payload field name === BA key.
+    const unrenamedOptions: BetterAuthOptions = {
+      ...minimalOptions,
+      plugins: [
+        {
+          id: "test-team-plugin",
+          schema: {
+            teamMember: {
+              modelName: "teamMembers",
+              fields: {
+                userId: {
+                  type: "string",
+                  references: { model: "users", field: "id" }
+                }
+              }
+            }
+          }
+        } as any
+      ]
+    };
+
+    // Options where session.userId IS renamed to "user" (mirrors the real
+    // account.userId → user / session.userId → user rename).
+    const renamedOptions: BetterAuthOptions = {
+      ...minimalOptions,
+      session: {
+        modelName: "sessions",
+        fields: { userId: "user" }
+      }
+    };
+
+    function mockPayloadWithTeamMembers(): BasePayload {
+      const base = defaultMockPayload();
+      return {
+        collections: {
+          ...(base as any).collections,
+          teamMembers: mockCollection("teamMembers", "teamMember", [
+            { name: "id", type: "number" },
+            { name: "userId", type: "relationship", relationTo: "users" }
+          ])
+        }
+      } as unknown as BasePayload;
+    }
+
+    function mockPayloadWithRenamedSessionUser(): BasePayload {
+      return {
+        collections: {
+          users: mockCollection("users", "user", [
+            { name: "id", type: "number" },
+            { name: "name", type: "text" },
+            { name: "email", type: "text" }
+          ]),
+          sessions: mockCollection("sessions", "session", [
+            { name: "id", type: "number" },
+            { name: "token", type: "text" },
+            { name: "user", type: "relationship", relationTo: "users" },
+            { name: "expiresAt", type: "date" },
+            { name: "createdAt", type: "date" },
+            { name: "updatedAt", type: "date" }
+          ])
+        }
+      } as unknown as BasePayload;
+    }
+
+    it("unrenamed + numeric ID: BA key gets a string, no numeric leak", () => {
+      const transform = createTransform(unrenamedOptions, false);
+      const payload = mockPayloadWithTeamMembers();
+
+      const result = transform.transformOutput({
+        doc: { id: 1, userId: 5 },
+        model: "teamMember" as any,
+        payload
+      }) as any;
+
+      expect(result.userId).toBe("5");
+      expect(typeof result.userId).toBe("string");
+    });
+
+    it("renamed + numeric ID: BA key is a string, Payload key keeps raw type", () => {
+      const transform = createTransform(renamedOptions, false);
+      const payload = mockPayloadWithRenamedSessionUser();
+
+      const result = transform.transformOutput({
+        doc: { id: 1, user: 5 },
+        model: "session" as any,
+        payload
+      }) as any;
+
+      expect(result.userId).toBe("5");
+      expect(typeof result.userId).toBe("string");
+      expect(result.user).toBe(5);
+    });
+
+    it("unrenamed + populated object: BA key gets a string ID, not an object", () => {
+      const transform = createTransform(unrenamedOptions, false);
+      const payload = mockPayloadWithTeamMembers();
+
+      const result = transform.transformOutput({
+        doc: { id: 1, userId: { id: 5, email: "test@test.com" } },
+        model: "teamMember" as any,
+        payload
+      }) as any;
+
+      expect(result.userId).toBe("5");
+      expect(typeof result.userId).toBe("string");
+    });
+
+    it("renamed + populated object: BA key is a string, Payload key is the object", () => {
+      const transform = createTransform(renamedOptions, false);
+      const payload = mockPayloadWithRenamedSessionUser();
+
+      const result = transform.transformOutput({
+        doc: { id: 1, user: { id: 5, email: "test@test.com" } },
+        model: "session" as any,
+        payload
+      }) as any;
+
+      expect(result.userId).toBe("5");
+      expect(typeof result.userId).toBe("string");
+      expect(result.user).toEqual({ id: "5", email: "test@test.com" });
     });
   });
 });

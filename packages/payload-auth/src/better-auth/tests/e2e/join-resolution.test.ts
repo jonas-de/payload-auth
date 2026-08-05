@@ -118,6 +118,70 @@ describe("Join Resolution", () => {
       expect(typeof found.user).toBe("object");
       expect(found.user.id).toBe(String(user.id));
       expect(found.user.email).toBe("forward-join@test.com");
+
+      // The joined doc must go through the same transformOutput normalization
+      // as reverse-joined docs — including ID normalization on the nested
+      // document itself (typeof id === "string", not left as a raw number).
+      //
+      // NOTE: we don't assert found.user.createdAt is a Date instance here.
+      // That's blocked by a separate, pre-existing bug in
+      // applySaveToJwtReturned (plugin/lib/sanitize-better-auth-options/
+      // utils/apply-save-to-jwt-returned.ts), which overwrites
+      // additionalFields.createdAt with a bare `{ returned: false }` object
+      // whenever the field lacks explicit saveToJWT: true — wiping the
+      // `type: "date"` off the BA schema for the "user" and "session"
+      // models entirely. That bug predates this change (confirmed via git
+      // history) and is out of scope for join normalization.
+      expect(typeof found.user.id).toBe("string");
+      // The BA field key (userId) must still carry the flat string ID
+      // alongside the populated object under the renamed Payload key (user),
+      // and both must agree on the same normalized ID value.
+      expect(typeof found.userId).toBe("string");
+      expect(found.userId).toBe(found.user.id);
+    });
+
+    it("should disambiguate multiple relationship fields targeting the same collection (session.user vs session.impersonatedBy)", async () => {
+      const { user: owner } = await signUpUser(
+        "session-owner@test.com",
+        "Session Owner"
+      );
+      const { user: admin } = await signUpUser(
+        "session-admin@test.com",
+        "Session Admin"
+      );
+
+      // Create a session row directly with BOTH `user` and `impersonatedBy`
+      // set to different users. Both fields are relationships targeting the
+      // "users" collection, so a join: { user: true } request must resolve
+      // to the `user` field specifically (via the BA schema's
+      // references.model), not `impersonatedBy` — and must not populate
+      // impersonatedBy at all since it wasn't requested.
+      const session = await payload.create({
+        collection: "sessions",
+        data: {
+          token: `disambiguation-test-token-${Date.now()}`,
+          expiresAt: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+          updatedAt: new Date().toISOString(),
+          user: Number(owner.id),
+          impersonatedBy: Number(admin.id)
+        } as any
+      });
+
+      const found = await adapter.findOne({
+        model: "session",
+        where: [{ field: "id", value: session.id }],
+        join: { user: true }
+      }) as any;
+
+      expect(found).not.toBeNull();
+      // The `user` field must be resolved and populated as an object.
+      expect(typeof found.user).toBe("object");
+      expect(found.user.id).toBe(String(owner.id));
+      // `impersonatedBy` was not requested in the join and must remain a
+      // flat scalar ID — proving the schema-driven lookup picked `user`
+      // and not the other users-relationship field on the same collection.
+      expect(typeof found.impersonatedBy).not.toBe("object");
+      expect(String(found.impersonatedBy)).toBe(String(admin.id));
     });
   });
 

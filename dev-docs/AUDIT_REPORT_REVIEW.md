@@ -18,9 +18,9 @@
 
 ## Executive Summary
 
-All 51 items from the original audit report were verified against the current codebase. **50 of 51 fixes are properly implemented.** One regression was found in the API key plugin configurator (P2-12), where the `userId.references.model` configuration was removed during the BA v1.5 upgrade.
+All 51 items from the original audit report were verified against the current codebase. **50 of 51 fixes are properly implemented.** One regression was found in the API key plugin configurator (P2-12), where the `userId.references.model` configuration was removed during the BA v1.5 upgrade. **This regression has since been fixed** (see [Regression Found](#regression-found)).
 
-A deep security and correctness review uncovered **11 new issues** not covered in the original audit: 3 high severity, 5 medium, and 3 low.
+A deep security and correctness review uncovered **11 new issues** not covered in the original audit: 3 high severity, 5 medium, and 3 low. **The 3 high-severity issues (NEW-1, NEW-2, NEW-3) have since been fixed** (see [New Issues](#new-issues)).
 
 ---
 
@@ -69,7 +69,7 @@ A deep security and correctness review uncovered **11 new issues** not covered i
 | P2-9 | `originalAfter` middleware not awaited | FIXED | `await originalAfter(ctx)` in both middleware files |
 | P2-10 | 2FA secret used as admin panel title | FIXED | `useAsTitle` set to `userId` field |
 | P2-11 | JWKS private key not hidden | FIXED | `hidden: true` in admin config |
-| P2-12 | Missing `references.model` in SSO, API Key, OIDC | **REGRESSION** | See [Regression Found](#regression-found) |
+| P2-12 | Missing `references.model` in SSO, API Key, OIDC | **REGRESSION — FIXED** | See [Regression Found](#regression-found) |
 | P2-13 | `set-admin-role` replaces roles | FIXED | Endpoint removed |
 | P2-14 | `refreshToken` uses `headers.set()` | FIXED | Changed to `headers.append()` |
 | P2-15 | Cookie deletion doesn't specify domain | KNOWN LIMITATION | Next.js `cookies()` API limitation |
@@ -101,7 +101,7 @@ A deep security and correctness review uncovered **11 new issues** not covered i
 
 ## Regression Found
 
-### P2-12 REGRESSION: API Key Plugin Missing `userId.references.model`
+### P2-12 REGRESSION: API Key Plugin Missing `userId.references.model` — FIXED
 
 **File:** `plugin/lib/sanitize-better-auth-options/api-key-plugin.ts`
 **Severity:** Medium
@@ -130,6 +130,8 @@ set(plugin, `schema.${model}.fields.userId.references.model`,
   getSchemaCollectionSlug(resolvedSchemas, baModelKey.user));
 ```
 
+**Resolution:** The BA v1.5 upgrade also renamed the api-key plugin's user-reference schema field from `userId` to `referenceId`; the configurator now sets `fields.referenceId.fieldName` and `fields.referenceId.references.model` (instead of the no-longer-existent `userId` key) so custom user collection slugs resolve correctly. Covered by 4 unit tests in `api-key-plugin.test.ts`, including a custom-slug regression test.
+
 ---
 
 ## New Issues
@@ -138,7 +140,7 @@ Issues discovered during deep codebase review that were not covered in the origi
 
 ### HIGH Severity
 
-#### NEW-1: `callbackURL` Open Redirect in Email Verification
+#### NEW-1: `callbackURL` Open Redirect in Email Verification — FIXED
 
 **File:** `plugin/helpers/generate-verify-email-url.ts:62`
 **Type:** Security — Open Redirect
@@ -155,9 +157,11 @@ If an attacker controls `callbackURL` (e.g. via a query parameter during signup)
 
 **Fix:** Validate that `callbackURL` is a relative URL (starts with `/` and not `//`) or matches the application's configured `baseURL` origin before embedding it.
 
+**Resolution:** `callbackURL` is now routed through the existing `getSafeRedirect` helper before being embedded; unsafe values (absolute URLs, protocol-relative URLs, disguised schemes) are dropped from the link entirely instead of being encoded verbatim. Covered by 6 DB-free unit tests in `generate-verify-email-url.test.ts`.
+
 ---
 
-#### NEW-2: Admin Invite Tokens Never Expire
+#### NEW-2: Admin Invite Tokens Never Expire — FIXED
 
 **File:** `plugin/lib/sanitize-better-auth-options/utils/require-admin-invite-for-sign-up-middleware.ts:48-51`
 **Type:** Security — Missing Expiration
@@ -177,9 +181,11 @@ Admin invite tokens remain valid indefinitely. If a token is leaked via logs, em
 
 **Fix:** Add a `createdAt` threshold or `expiresAt` field to the invitation model and include it in the query. A reasonable default would be 7 days.
 
+**Resolution:** Added a required `expiresAt` field to the admin-invitations collection, set to 7 days from mint time. The pre-signup gate now requires an unexpired invitation, and the after-signup middleware treats an expired invitation as absent — it neither assigns the invited role nor consumes the token. Covered by 3 integration tests in `admin-invite-expiry.test.ts` plus updated fixtures in `set-admin-role.test.ts`.
+
 ---
 
-#### NEW-3: `beforeDelete` Hook Swallows Errors, Allows Orphaned Records
+#### NEW-3: `beforeDelete` Hook Swallows Errors, Allows Orphaned Records — FIXED
 
 **File:** `plugin/lib/build-collections/users/hooks/before-delete.ts:115-119`
 **Type:** Data Integrity — Orphaned Records
@@ -199,6 +205,8 @@ The user record is still deleted, leaving orphaned auth records that reference a
 **Impact:** Database integrity violations. Orphaned sessions could theoretically be used to authenticate as a deleted user if the session lookup doesn't join to the users table.
 
 **Fix:** Re-throw the error after logging so the user deletion is aborted when cascade deletes fail. The transaction rollback (`killTransaction`) is already called, so re-throwing will prevent the parent delete from committing.
+
+**Resolution:** The catch block now re-throws after `killTransaction` + `console.error`, so a failed cascade aborts the parent user delete instead of proceeding. Covered by an updated regression test in `before-delete-hook.test.ts` asserting the hook rejects.
 
 ---
 
@@ -366,10 +374,10 @@ The hardcoded default of `["name"]` may not match all user schemas. If a user ad
 
 ### Immediate (Before Release)
 
-1. **Fix P2-12 regression** — Re-add `userId.fieldName` and `userId.references.model` to the API key plugin configurator
-2. **Fix NEW-1** — Validate `callbackURL` in email verification URL generation (open redirect)
-3. **Fix NEW-2** — Add expiration check to admin invite token validation
-4. **Fix NEW-3** — Re-throw errors in `beforeDelete` hook to prevent orphaned records
+1. ~~**Fix P2-12 regression** — Re-add `userId.fieldName` and `userId.references.model` to the API key plugin configurator~~ **DONE**
+2. ~~**Fix NEW-1** — Validate `callbackURL` in email verification URL generation (open redirect)~~ **DONE**
+3. ~~**Fix NEW-2** — Add expiration check to admin invite token validation~~ **DONE**
+4. ~~**Fix NEW-3** — Re-throw errors in `beforeDelete` hook to prevent orphaned records~~ **DONE**
 
 ### Short-Term
 

@@ -25,6 +25,7 @@ import {
   isAdminWithRoles
 } from "../utils/payload-access";
 import { getCollectionFields } from "../utils/transform-schema-fields-to-payload";
+import { resolveBaseURL } from "@/better-auth/plugin/payload/utils/resolve-base-url";
 import { betterAuthStrategy } from "./better-auth-strategy";
 import {
   getGenerateInviteUrlEndpoint,
@@ -63,6 +64,13 @@ export function buildUsersCollection({
     pluginOptions.betterAuthOptions ?? {},
     supportedBAPluginIds.username
   );
+  const resolvedBaseURL = resolveBaseURL(
+    pluginOptions.betterAuthOptions?.baseURL
+  );
+  const twoFactorOptions =
+    pluginOptions.betterAuthOptions?.plugins?.find(
+      (plugin) => plugin.id === supportedBAPluginIds.twoFactor
+    )?.options ?? {};
   const existingUserCollection = incomingCollections.find(
     (collection) => collection.slug === userSlug
   ) as CollectionConfig | undefined;
@@ -122,7 +130,12 @@ export function buildUsersCollection({
         description: "Whether the user has two factor authentication enabled",
         components: {
           Field: {
-            path: "payload-auth/better-auth/plugin/client#TwoFactorAuth"
+            path: "payload-auth/better-auth/plugin/client#TwoFactorAuth",
+            clientProps: {
+              baseURL: resolvedBaseURL,
+              basePath: pluginOptions.betterAuthOptions?.basePath,
+              twoFactorDigits: twoFactorOptions?.totpOptions?.digits
+            }
           }
         }
       }
@@ -236,7 +249,7 @@ export function buildUsersCollection({
                   path: "payload-auth/better-auth/plugin/client#AdminButtons",
                   clientProps: {
                     userSlug,
-                    baseURL: pluginOptions.betterAuthOptions?.baseURL,
+                    baseURL: resolvedBaseURL,
                     basePath: pluginOptions.betterAuthOptions?.basePath
                   }
                 },

@@ -1,5 +1,8 @@
 import { postgresAdapter } from "@payloadcms/db-postgres";
 import { buildConfig } from "payload";
+import dotenv from "dotenv";
+
+dotenv.config({ path: new URL("./.env", import.meta.url).pathname });
 import {
   // type BetterAuthOptions,
   betterAuthPlugin,
@@ -251,7 +254,9 @@ export const payloadConfig = buildConfig({
   secret: "super-secret-payload-key",
   db: postgresAdapter({
     pool: {
-      connectionString: "postgres://forrestdevs:@localhost:5432/auth-test"
+      connectionString:
+        process.env.DATABASE_URL ??
+        "postgres://postgres:postgres@localhost:5432/auth-test"
     },
     migrationDir: decodeURIComponent(
       new URL("./migrations", import.meta.url).pathname

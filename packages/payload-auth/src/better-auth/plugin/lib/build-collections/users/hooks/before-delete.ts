@@ -115,7 +115,7 @@ export function getBeforeDeleteHook(): CollectionBeforeDeleteHook {
     } catch (error) {
       await killTransaction(req);
       console.error("Error in user beforeDelete hook:", error);
-      return;
+      throw error;
     }
   };
 

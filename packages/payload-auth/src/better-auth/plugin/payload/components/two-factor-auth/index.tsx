@@ -19,16 +19,21 @@ import React, { useMemo, useState } from "react";
 import { z } from "zod";
 import { useAppForm } from "@/shared/form";
 import { Form, FormInputWrap } from "@/shared/form/ui";
-import { passwordField } from "@/shared/form/validation";
+import { otpField, passwordField } from "@/shared/form/validation";
 
 const baseClass = "two-factor-auth-modal";
 
 interface TwoFactorAuthProps {
   baseURL?: string;
   basePath?: string;
+  twoFactorDigits?: number;
 }
 
-export function TwoFactorAuth({ baseURL, basePath }: TwoFactorAuthProps) {
+export function TwoFactorAuth({
+  baseURL,
+  basePath,
+  twoFactorDigits = 6
+}: TwoFactorAuthProps) {
   const [totpURI, setTotpURI] = useState("");
   const [backupCodes, setBackupCodes] = useState<string[] | null>(null);
   const [formState, setFormState] = useState<
@@ -65,10 +70,7 @@ export function TwoFactorAuth({ baseURL, basePath }: TwoFactorAuthProps) {
   });
 
   const otpSchema = z.object({
-    otp: z
-      .string()
-      .length(6, "Code must be 6 digits")
-      .refine((val) => /^\d{6}$/.test(val), "Code must be numeric")
+    otp: otpField({ digits: twoFactorDigits })
   });
 
   const EnableForm = () => {
@@ -171,7 +173,7 @@ export function TwoFactorAuth({ baseURL, basePath }: TwoFactorAuthProps) {
               <field.TextField
                 type="text"
                 className="text otp"
-                label="6‑digit Code"
+                label={`${twoFactorDigits}‑digit Code`}
                 required
               />
             )}

@@ -46,9 +46,14 @@ export const requireAdminInviteForSignUpMiddleware = async ({
       value: adminInviteToken,
       operator: "eq"
     };
+    const notExpiredQuery: Where = {
+      field: "expiresAt",
+      value: new Date(),
+      operator: "gt"
+    };
     const isValidAdminInvitation = await ctx.context.adapter.count({
       model: pluginOptions.adminInvitations?.slug ?? baseSlugs.adminInvitations,
-      where: [query]
+      where: [query, notExpiredQuery]
     });
     if (isValidAdminInvitation) {
       if (originalBefore) return originalBefore(ctx);

@@ -1,4 +1,4 @@
-import type { BetterAuthOptions, Where } from "better-auth";
+import { BetterAuthError, type BetterAuthOptions, type Where } from "better-auth";
 import type { DBFieldAttribute } from "better-auth/db";
 import { getAuthTables } from "better-auth/db";
 import {
@@ -19,6 +19,40 @@ export const createTransform = (
   enableDebugLogs: boolean
 ) => {
   const schema = getAuthTables(options);
+
+  // BA's core `getAuthTables` (@better-auth/core/db/get-tables.mjs) hardcodes
+  // the base session.userId and account.userId fields' `references.model` to
+  // the literal BA model key "user" — it does NOT resolve this through
+  // `options.user.modelName` the way this codebase's plugin field renames do
+  // (unlike plugin-declared relationship fields such as member.userId or
+  // session.impersonatedBy, which sanitizeBetterAuthOptions/configureXPlugin
+  // already rewrite to the resolved Payload collection slug before
+  // betterAuth() processes them).
+  //
+  // getForwardRelationFieldNames() below disambiguates forward-join targets
+  // by matching `field.references.model` against the Payload collection slug
+  // (e.g. "users"), not the BA model key ("user"). Left unpatched, session's
+  // literal-"user" userId field never matches "users", so a `join: { user:
+  // true }` request (used throughout BA — internal-adapter's findSession,
+  // organization's listOrganizations, admin's impersonation checks, etc.)
+  // either finds no forward-relationship field at all, or — worse, when the
+  // admin plugin is enabled — incorrectly matches session.impersonatedBy
+  // instead (whose references.model IS correctly rewritten by
+  // configureAdminPlugin), silently populating the wrong field and leaving
+  // session.user as a raw unpopulated foreign-key id.
+  //
+  // Patch it here, once, using the already-resolved user collection slug
+  // (schema.user.modelName is set via sanitizeBetterAuthOptions before this
+  // runs) so both directions resolve to the correct field.
+  const resolvedUserCollectionSlug = schema?.user?.modelName;
+  if (resolvedUserCollectionSlug) {
+    if (schema.session?.fields?.userId?.references) {
+      schema.session.fields.userId.references.model = resolvedUserCollectionSlug;
+    }
+    if (schema.account?.fields?.userId?.references) {
+      schema.account.fields.userId.references.model = resolvedUserCollectionSlug;
+    }
+  }
 
   function debugLog(message: any[]) {
     if (enableDebugLogs) {
@@ -121,6 +155,38 @@ export const createTransform = (
   }
 
   /**
+   * Checks if a field in the Payload collection is a hasMany select field
+   * (e.g. users.role, built from pluginOptions.users.roles/adminRoles).
+   *
+   * This is used to scope BetterAuth's comma-string <-> array role
+   * conversion to only the fields that are actually stored as arrays.
+   * member/invitation store role as plain text (BA's comma-string) and
+   * must not be force-converted into an array.
+   *
+   * @param payload - The Payload client instance
+   * @param collectionSlug - The slug of the collection
+   * @param fieldName - The name of the field to check
+   * @returns True if the field is a hasMany select field, false otherwise
+   */
+  function isHasManySelectField(
+    payload: BasePayload,
+    collectionSlug: string,
+    fieldName: string
+  ): boolean {
+    const collection = payload.collections[collectionSlug];
+    if (!collection) return false;
+
+    let fields = flattenedFieldsCache.get(collectionSlug);
+    if (!fields) {
+      fields = flattenAllFields({ fields: collection.config.fields });
+      flattenedFieldsCache.set(collectionSlug, fields);
+    }
+    const field = fields.find((f) => f.name === fieldName);
+
+    return field?.type === "select" && (field as any).hasMany === true;
+  }
+
+  /**
    * Maps a BetterAuth schema field to its corresponding Payload CMS field name.
    *
    * This function resolves the appropriate field name by:
@@ -163,6 +229,40 @@ export const createTransform = (
     debugLog(["getField: ", { model, originalField: field, fieldName }]);
 
     return fieldName;
+  }
+
+  /**
+   * Resolves the Payload field name(s) on `model` that hold a forward
+   * (many-to-one) relationship to `joinCollectionSlug`, based on the
+   * BetterAuth schema's `references.model` metadata.
+   *
+   * This disambiguates fields that Payload's `relationTo` alone cannot:
+   * e.g. session has both `user` and `impersonatedBy` relating to the same
+   * "users" collection, so picking the first Payload relationship field
+   * whose `relationTo` matches is unreliable (luck of field order). The BA
+   * schema's `references.model` tells us exactly which field BetterAuth
+   * intends for a given forward join.
+   *
+   * Note: `field.references.model` here is a Payload collection slug (not
+   * a BA model key) — this codebase's plugin sanitization step
+   * (configureOrganizationPlugin / configureAdminPlugin) always rewrites
+   * `references.model` to the resolved collection slug before betterAuth()
+   * processes it, and BetterAuth's own base fields resolve it the same way
+   * via `options.<model>.modelName`.
+   *
+   * Returns all matches (usually one) so the caller can detect and log
+   * ambiguity rather than silently picking one.
+   */
+  function getForwardRelationFieldNames(
+    model: ModelKey,
+    joinCollectionSlug: string
+  ): string[] {
+    const modelFields = schema[model]?.fields;
+    if (!modelFields) return [];
+
+    return Object.entries(modelFields)
+      .filter(([, field]) => field.references?.model === joinCollectionSlug)
+      .map(([fieldKey]) => getFieldName(model, fieldKey));
   }
 
   /**
@@ -271,18 +371,24 @@ export const createTransform = (
    * @param value - The value to normalize
    * @param isRelatedField - Whether this field is a relationship field
    * @param idType - The expected ID type ('number' or 'text')
+   * @param isHasManySelect - Whether the target Payload field is a hasMany select
+   *   (e.g. users.role). Only fields of this type get BA's comma-string <-> array
+   *   role conversion — member/invitation store role as plain text and must
+   *   pass through untouched.
    * @returns The normalized value
    */
   function normalizeData({
     key,
     value,
     isRelatedField,
-    idType
+    idType,
+    isHasManySelect
   }: {
     key: string;
     value: any;
     isRelatedField: boolean;
     idType: "number" | "text";
+    isHasManySelect: boolean;
   }) {
     // Skip processing for null/undefined values
     if (value === null || value === undefined) {
@@ -348,15 +454,21 @@ export const createTransform = (
       }
     }
 
-    // Handle role fields (Coming from better auth, will be a single string separated by commas if there are multiple roles)
-    if (key === "role" || key === "roles") {
+    // Handle role fields (coming from better-auth, will be a single string
+    // separated by commas if there are multiple roles). This conversion only
+    // applies when the target Payload field is a hasMany select (e.g.
+    // users.role) — member/invitation store role as plain text holding BA's
+    // comma-string and must not be force-converted into an array (#112).
+    // Casing is preserved (no .toLowerCase()) so configured roles like
+    // "orgOwner" survive select validation / adminRoles checks (ADAPTER-10).
+    if ((key === "role" || key === "roles") && isHasManySelect) {
       if (Array.isArray(value)) {
         return value.map((role: string) =>
-          typeof role === "string" ? role.trim().toLowerCase() : role
+          typeof role === "string" ? role.trim() : role
         );
       }
       if (typeof value === "string") {
-        return value.split(",").map((role: string) => role.trim().toLowerCase());
+        return value.split(",").map((role: string) => role.trim());
       }
       return value;
     }
@@ -416,12 +528,22 @@ export const createTransform = (
       const isRelatedField =
         isRelationshipField(key, schemaFields) || isPayloadRel;
 
+      // Determine if the target Payload field is a hasMany select (e.g.
+      // users.role) — only these get BA's comma-string <-> array role
+      // conversion (#112).
+      const isHasManySelect = isHasManySelectField(
+        payload,
+        collectionSlug,
+        targetFieldName
+      );
+
       // Normalize the data value based on field type and ID type
       const normalizedData = normalizeData({
         idType,
         key,
         value,
-        isRelatedField
+        isRelatedField,
+        isHasManySelect
       });
 
       const targetFieldKey = getCollectionFieldNameByFieldKeyUntyped(
@@ -658,10 +780,17 @@ export const createTransform = (
   ): void {
     // Case 1: Primitive ID value (string or number)
     if (typeof value === "string" || typeof value === "number") {
-      // For BetterAuth: Always use string IDs
+      // For Payload: Keep original type — but only under a distinct key.
+      // When fieldName === originalKey (no rename configured for this
+      // field), writing here would be immediately clobbered by the
+      // BetterAuth string ID below, which is exactly what we want: BA
+      // must always receive a string ID under its own field key.
+      if (fieldName !== originalKey) {
+        result[fieldName] = value;
+      }
+      // For BetterAuth: Always use string IDs. Written last so it always
+      // wins on the BA field key, even when fieldName === originalKey.
       result[originalKey] = String(value);
-      // For Payload: Keep original type
-      result[fieldName] = value;
       return;
     }
 
@@ -672,13 +801,17 @@ export const createTransform = (
       !Array.isArray(value) &&
       "id" in value
     ) {
-      // For BetterAuth: Extract and stringify the ID
+      // Preserve the populated relationship object so joins return full
+      // documents — but only under a distinct key. See Case 1 for why.
+      if (fieldName !== originalKey) {
+        result[fieldName] = {
+          ...value,
+          id: String(value.id)
+        };
+      }
+      // For BetterAuth: Extract and stringify the ID. Written last so it
+      // always wins on the BA field key.
       result[originalKey] = String(value.id);
-      // Preserve the populated relationship object so joins return full documents
-      result[fieldName] = {
-        ...value,
-        id: String(value.id)
-      };
       return;
     }
 
@@ -690,17 +823,22 @@ export const createTransform = (
           (item) => typeof item === "object" && item !== null && "id" in item
         )
       ) {
-        // Array of objects with IDs
+        // Array of objects with IDs — keep joined documents intact while
+        // normalizing ID type, but only under a distinct key.
+        if (fieldName !== originalKey) {
+          result[fieldName] = value.map((item) => ({
+            ...item,
+            id: String(item.id)
+          }));
+        }
+        // For BetterAuth: array of string IDs, written last so it wins.
         result[originalKey] = value.map((item) => String(item.id));
-        // Keep joined documents intact while normalizing ID type
-        result[fieldName] = value.map((item) => ({
-          ...item,
-          id: String(item.id)
-        }));
       } else {
         // Array of primitive IDs
+        if (fieldName !== originalKey) {
+          result[fieldName] = value.map((item) => item);
+        }
         result[originalKey] = value.map((item) => String(item));
-        result[fieldName] = value.map((item) => item);
       }
       return;
     }
@@ -812,7 +950,12 @@ export const createTransform = (
       const id = value.id;
       if (idType === "number" && typeof id === "string") {
         const numId = Number(id);
-        return !isNaN(numId) ? numId : id;
+        if (isNaN(numId)) {
+          throw new BetterAuthError(
+            `[payload-db-adapter] Cannot convert id "${id}" on relationship/ID field "${lookupKey}" (model: "${model}") to a numeric ID (idType: "number"). The referenced document's id must be a numeric string or number.`
+          );
+        }
+        return numId;
       }
       if (idType === "text" && typeof id === "number") {
         return String(id);
@@ -820,13 +963,27 @@ export const createTransform = (
       return id;
     }
 
-    // Case 2: Value is a standalone ID that needs type conversion
-    if (
-      idType === "number" &&
-      typeof value === "string" &&
-      !isNaN(Number(value))
-    ) {
-      return Number(value);
+    // Case 2: Value is a standalone ID that needs type conversion.
+    // A value that genuinely cannot be coerced to the configured idType
+    // (including a missing/undefined value where a real ID was expected)
+    // must fail loudly here rather than silently passing through — letting
+    // it reach the database driver produces an opaque `params: NaN`
+    // Postgres error with no indication of which field or document caused it.
+    if (idType === "number") {
+      if (typeof value === "string") {
+        const numValue = Number(value);
+        if (isNaN(numValue)) {
+          throw new BetterAuthError(
+            `[payload-db-adapter] Cannot convert where-clause value "${value}" for relationship/ID field "${lookupKey}" (model: "${model}") to a numeric ID (idType: "number").`
+          );
+        }
+        return numValue;
+      }
+      if (value === undefined) {
+        throw new BetterAuthError(
+          `[payload-db-adapter] Missing value for relationship/ID field "${lookupKey}" (model: "${model}") in where clause — expected a numeric ID but received undefined. This usually means an upstream document reference (e.g. a forward-joined relationship such as session.user) was not populated correctly.`
+        );
+      }
     }
     if (idType === "text" && typeof value === "number") {
       return String(value);
@@ -1030,6 +1187,7 @@ export const createTransform = (
   return {
     getFieldName,
     getCollectionSlug,
+    getForwardRelationFieldNames,
     singleIdQuery,
     transformInput,
     transformOutput,

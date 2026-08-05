@@ -79,6 +79,9 @@ export const getGenerateInviteUrlEndpoint = ({
         payload: req.payload,
         token
       });
+      const expiresAt = new Date(
+        Date.now() + 7 * 24 * 60 * 60 * 1000
+      ).toISOString();
 
       try {
         await req.payload.create({
@@ -87,7 +90,8 @@ export const getGenerateInviteUrlEndpoint = ({
           data: {
             token,
             role: body.role.value,
-            url: inviteLink
+            url: inviteLink,
+            expiresAt
           }
         });
         const response = new Response(
